@@ -1,7 +1,7 @@
 ---
 
-typora-root-url: image
-typora-copy-images-to: image
+typora-root-url: images
+typora-copy-images-to: images
 ---
 
 
@@ -14,15 +14,17 @@ typora-copy-images-to: image
 
 ### 简介
 
+通常，我们用mysql做持久化存储，ES用作检索
+
 https://www.elastic.co/cn/what-is/elasticsearch/
 
 全文搜索属于最常见的需求，开源的 Elasticsearch 是目前全文搜索引擎的首选。
 
 他可以快速地存储、搜索和分析海量数据。维基百科、Stack Overflow、Github 都采用他
 
-![image-20201026084916698](image-20201026084916698.png)
+![image-20201026084916698](/image-20201026084916698.png)
 
-Elatic 的底层是开源库吧Lucene。但是，你没法直接用，必须自己写代码调用它的接口，Elastic 是 Lunce 的封装，提供了 REST API 的操作接口，开箱即用
+Elastic 的底层是开源库Lucene。但是，你没法直接用，必须自己写代码调用它的接口，Elastic 是 Lucene 的封装，提供了 REST API 的操作接口，开箱即用
 
 REST API：天然的跨平台
 
@@ -35,6 +37,8 @@ REST API：天然的跨平台
 http://doc.codingdict.com/elasticsearch/
 
 ### 1.1、基本概念
+
+`index库`>`type表`>`document文档`
 
 #### 1.1.1 index(索引)
 
@@ -52,9 +56,56 @@ http://doc.codingdict.com/elasticsearch/
 
 保存在某个索引（index）下，某种类型（Type）的一个数据（Document）,文档是 JSON 格式的，Document 就像是 MySQL 中某个 Table 里面的内容
 
-#### 1.1.4 倒排索引机制
+#### 1.1.4 倒排索引机制-ES搜索快的秘密
 
-![image-20201026092738311](image-20201026092738311.png)
+> 倒排索引，英文原名Inverted index，大概因为 Invert 有颠倒的意思，就被翻译成了倒排。
+> 但是倒排这个名称很容易让人误解为从A-Z颠倒成Z-A。
+>
+> 个人认为翻译成转置索引可能比较合适。
+> 一个未经处理的数据库中，一般是以文档ID作为索引，以文档内容作为记录。
+> 而Inverted index 指的是将单词或记录作为索引，将文档ID作为记录，这样便可以方便地通过单词或记录查找到其所在的文档。
+
+保存的记录
+
+- 红海行动
+- 探索红海行动
+- 红海特别行动
+- 红海记录片
+- 特工红海特别探索
+
+将内容分词，创建倒排索引。
+
+| 词     | 记录      |
+| ------ | --------- |
+| 红海   | 1,2,3,4,5 |
+| 行动   | 1,2,3     |
+| 探索   | 2,5       |
+| 特别   | 3,5       |
+| 纪录片 | 4,        |
+| 特工   | 5         |
+
+检索过程：
+
+1）、红海特工行动？查出后计算相关性得分：3号记录命中了2次，且3号本身才有3个单词，2/3，所以3号最匹配
+2）、红海行动？
+
+> 思考：学过MySql等常见数据库的知道，模糊检索%xxx%不能使用索引，执行效率极低。
+>
+> es通过分词并创建倒排索引的机制克服了模糊检索效率低的问题。
+>
+> 用一个字符串str1在es里检索，先用分词器将str1拆分成几个词。每个词通过倒排索引找出匹配的记录。哪个记录匹配的次数多，就得分最高，展示在最前面。
+>
+> 比如我们想在字典查出包含“车”的所有字。现有字典没有这种索引，只能创建一种新索引，才能满足这种需求。
+
+> 消失的type参数
+>
+> 关系型数据库中两个数据表示是独立的，即使他们里面有相同名称的列也不影响使用，但ES中不是这样的。elasticsearch是基于Lucene开发的搜索引擎，而ES中不同type下名称相同的filed最终在Lucene中的处理方式是一样的。
+>
+> 两个不同type下的两个user_name，在ES同一个索引下其实被认为是同一个filed，你必须在两个不同的type中定义相同的filed映射。否则，不同type中的相同字段名称就会在处理中出现冲突的情况，导致Lucene处理效率下降。
+> 去掉type就是为了提高ES处理数据的效率。
+> Elasticsearch 7.xURL中的type参数为可选。比如，索引一个文档不再要求提供文档类型。
+> Elasticsearch 8.x不再支持URL中的type参数。
+> 解决：将索引从多类型迁移到单类型，每种类型文档一个独立索引。
 
 ### 1.2 Docker 安装 ES
 
@@ -73,13 +124,16 @@ docker pull kibana:7.4.2 可视化检索数据
 ```bash
 mkdir -p /mydata/elasticsearch/config # 用来存放配置文件
 mkdir -p /mydata/elasticsearch/data  # 数据
-echo "http.host: 0.0.0.0" >/mydata/elasticsearch/config/elasticsearch.yml # 允许任何机器访问
+echo "http.host: 0.0.0.0" >/mydata/elasticsearch/config/elasticsearch.yml # es可以被远程任何机器访问
 chmod -R 777 /mydata/elasticsearch/ ## 设置elasticsearch文件可读写权限
 ```
 
 启动
 
 ```bash
+# 9200是用户交互端口 9300是集群心跳端口
+# -e指定是单阶段运行
+# -e指定占用的内存大小，生产时可以设置32G
 docker run --name elasticsearch -p 9200:9200 -p 9300:9300 \
 -e  "discovery.type=single-node" \
 -e ES_JAVA_OPTS="-Xms64m -Xmx512m" \
@@ -95,11 +149,11 @@ docker run --name elasticsearch -p 9200:9200 -p 9300:9300 \
 docker update elasticsearch --restart=always
 ```
 
-以后再外面装好插件重启就可
+以后在外面装好插件重启就可
 
-特别注意：
+> 因为容器里的文件映射到了外面，所以删除容器和新建容器数据还在
 
--e ES_JAVA_OPTS="-Xms64m -Xmx128m" \ 测试环境下，设置 ES 的初始内存和最大内存，否则导致过大启动不了ES
+> 第一次查docker ps启动了，第二次查的时候发现关闭了，docker logs elasticsearch
 
 ##### 2、Kibana
 
@@ -109,6 +163,35 @@ docker run --name kibana -e ELASTICSEARCH_HOSTS=http://192.168.56.10:9200 -p 560
 http://192.168.56.10:9200 改成自己Elasticsearch上的地址
 ```
 
+访问Kibana： http://#:5601/app/kibana 
+
+![image-20200501192629304](image-20200501192629304.png)
+
+> 遇到了更新阿里源也下载不下来kibana镜像的情况，先在别的网络下载下来后传到vagrant中
+>
+> ```shell
+> docker save -o kibana.tar kibana:7.4.2 
+> 
+> docker load -i kibana.tar 
+> 
+> # 如何通过其他工具链接ssh
+> 
+> 修改/etc/ssh/sshd_config
+> 修改 PasswordAuthentication yes
+> 
+> systemctl restart sshd.service  或 service sshd restart
+> 
+> # 连接192.168.56.10:22端口成功，用户名root，密码vagrant
+> 
+> 也可以通过vagrant ssh-config查看ip和端口，此时是127.0.0.1:2222
+> 
+> 
+> ```
+
+> 在安装离线docker镜像的时候还提示内存不足，看了下是因为外部挂载的内存也算在了vagrant中，即使外部删了很多文件，vagrant中df -h硬盘占用率也不下降。我在外部删完文件后在内部又rm -rf XXX 强行解除占用
+
+
+
 ##### 3、安装nginx
 
 随便启动一个 nginx 实例，只是为了复制出配置
@@ -117,9 +200,7 @@ http://192.168.56.10:9200 改成自己Elasticsearch上的地址
 docker run -p80:80 --name nginx -d nginx:1.10   
 ```
 
-将容器内的配置文件拷贝到当前目录 （注意后面有个小点
-
-）
+将容器内的配置文件拷贝到当前目录 （注意后面有个小点）
 
 ```bash
 docker container cp nginx:/etc/nginx .  
@@ -160,13 +241,45 @@ rm -rf /mydata/nginx/conf/nginx
 
 #### 1.3.1、_cat
 
-GET /_cat/nodes：查看所有节点
+（1）GET/_cat/nodes：查看所有节点_
 
-GET /_cat/health：查看 es 健康状况
+ 如：http://#:9200/_cat/nodes :
 
-GET /_cat/master：查看主节点
+```
+127.0.0.1 61 91 11 0.08 0.49 0.87 dilm * 0adeb7852e00
+```
 
-GET /_cat/incices：查看所有索引 show databases;
+注：*表示集群中的主节点
+
+（2）GET/_cat/health：查看es健康状况_
+
+如： http://#:9200/_cat/health 
+
+```
+1588332616 11:30:16 elasticsearch green 1 1 3 3 0 0 0 0 - 100.0%
+```
+
+注：green表示健康值正常
+
+（3）GET/_cat/master：查看主节点_
+
+如： http://#:9200/_cat/master 
+
+```
+vfpgxbusTC6-W3C2Np31EQ 127.0.0.1 127.0.0.1 0adeb7852e00
+```
+
+（4）GET/_cat/indicies：查看所有索引 ，等价于mysql数据库的show databases;
+
+如： http://#:9200/_cat/indices 
+
+```json
+green open .kibana_task_manager_1   KWLtjcKRRuaV9so_v15WYg 1 0 2 0 39.8kb 39.8kb
+green open .apm-agent-configuration cuwCpJ5ER0OYsSgAJ7bVYA 1 0 0 0   283b   283b
+green open .kibana_1                PqK_LdUYRpWMy4fK0tMSPw 1 0 7 0 31.2kb 31.2kb
+```
+
+####  
 
 #### 1.3.2 索引一个文档（保存）
 
@@ -202,7 +315,7 @@ GET custome/external/1
 ```
 
 ```
-更新携带：?if_seq_no=4&if_primary_term=1
+在使用乐观锁更新时，就可以通过携带：?if_seq_no=4&if_primary_term=1  实现了乐观锁更新
 ```
 
 
@@ -239,16 +352,230 @@ POS customer/external/1/_update
 PUT 和 POST 不带_update也可以
 ```
 
-#### 1.3.5 删除文档&索引
+#### 1.3.5 PUT与POST的比较
 
-```http
+保存一个数据，保存在哪个索引的哪个类型下，指定用那个唯一标识
+PUT customer/external/1;在customer索引下的external类型下保存1号数据为
+
+```
+PUT customer/external/1
+```
+
+
+
+```json
+{
+ "name":"John Doe"
+}
+```
+
+PUT和POST都可以
+POST新增。如果不指定id，会自动生成id。指定id就会修改这个数据，并新增版本号；
+PUT可以新增也可以修改。PUT必须指定id；由于PUT需要指定id，我们一般用来做修改操作，不指定id会报错。
+
+
+
+下面是在postman中的测试数据：
+![image-20200501194449944](image-20200501194449944.png)
+
+创建数据成功后，显示201 created表示插入记录成功。
+
+```json
+{
+    "_index": "customer",
+    "_type": "external",
+    "_id": "1",
+    "_version": 1,
+    "result": "created",
+    "_shards": {
+        "total": 2,
+        "successful": 1,
+        "failed": 0
+    },
+    "_seq_no": 0,
+    "_primary_term": 1
+}
+```
+
+这些返回的JSON串的含义；这些带有下划线开头的，称为元数据，反映了当前的基本信息。
+
+"_index": "customer" 表明该数据在哪个数据库下；
+
+"_type": "external"     表明该数据在哪个类型下；
+
+"_id": "1"                    表明被保存数据的id；
+
+ "_version": 1,            被保存数据的版本
+
+"result": "created"      这里是创建了一条数据，如果重新put一条数据，则该状态会变为updated，并且版本号也会发生变化。
+
+
+
+下面选用POST方式：
+
+添加数据的时候，不指定ID，会自动的生成id，并且类型是新增：
+
+<img src="/image-20200501195619925.png" alt="image-20200501195619925" style="zoom: 52%;" />
+
+再次使用POST插入数据，仍然是新增的：
+
+<img src="/image-20200501195732492.png" alt="image-20200501195732492" style="zoom: 80%;" />
+
+
+
+添加数据的时候，指定ID，会使用该id，并且类型是新增：
+
+<img src="/image-20200501200048361.png" alt="image-20200501200048361" style="zoom: 66%;" />
+
+再次使用POST插入数据，类型为updated
+
+<img src="/image-20200501200132199.png" alt="image-20200501200132199" style="zoom:67%;" />
+
+#### 1.3.5 乐观锁更新
+
+GET /customer/external/1
+
+ http://#:9200/customer/external/1 
+
+```json
+{
+    "_index": "customer",//在哪个索引
+    "_type": "external",//在哪个类型
+    "_id": "1",//记录id
+    "_version": 3,//版本号
+    "_seq_no": 6,//并发控制字段，每次更新都会+1，用来做乐观锁
+    "_primary_term": 1,//同上，主分片重新分配，如重启，就会变化
+    "found": true,
+    "_source": {
+        "name": "John Doe"
+    }
+}
+```
+
+ 
+
+
+
+通过“if_seq_no=1&if_primary_term=1 ”，当序列号匹配的时候，才进行修改，否则不修改。
+
+实例：将id=1的数据更新为name=1，然后再次更新为name=2，起始_seq_no=6，_primary_term=1
+
+（1）将name更新为1
+
+ http://#:9200/customer/external/1?if_seq_no=6&if_primary_term=1 
+
+<img src="/image-20200501212224983-1622618846259.png" alt="image-20200501212224983" style="zoom: 61%;" />
+
+ （2）将name更新为2，更新过程中使用seq_no=6
+
+http://#:9200/customer/external/1?if_seq_no=6&if_primary_term=1 
+
+<img src="/image-20200501213047499-1622618846260.png" alt="image-20200501213047499" style="zoom: 60%;" />
+
+出现更新错误。
+
+
+
+（3）查询新的数据
+
+ http://#:9200/customer/external/1 
+
+![image-20200501212924094](/image-20200501212924094-1622618846260.png)
+
+能够看到_seq_no变为7。
+
+（4）再次更新，更新成功
+
+ http://#:9200/customer/external/1?if_seq_no=7&if_primary_term=1 
+
+<img src="/image-20200501213130001-1622618846260.png" alt="image-20200501213130001" style="zoom:75%;" />
+
+#### 4）更新文档
+
+![image-20200501214522818](/image-20200501214522818-1622618846260.png)
+
+ ![image-20200501215746139](/image-20200501215746139-1622618846260.png)
+
+（1）POST更新文档，带有_update
+
+http://#:9200/customer/external/1/_update 
+
+![image-20200501214810741](/image-20200501214810741-1622618846260.png)
+
+如果再次执行更新，则不执行任何操作，序列号也不发生变化
+
+![image-20200501214912607](/image-20200501214912607-1622618846260.png)
+
+POST更新方式，会对比原来的数据，和原来的相同，则不执行任何操作（version和_seq_no也不会变化）。
+
+ （2）POST更新文档，不带_update
+
+![image-20200501215358666](/image-20200501215358666-1622618846260.png)
+
+在更新过程中，重复执行更新操作，数据也能够更新成功，不会和原来的数据进行对比。
+
+#### 1.3.6 删除文档&索引
+
+#### 
+
+```
 DELETE customer/external/1
 DELETE customer
 ```
 
-#### 1.3.6 bulk 批量 API
+注：elasticsearch并没有提供删除类型的操作，只提供了删除索引和文档的操作。
 
-```http
+
+
+实例：删除id=1的数据，删除后继续查询
+
+<img src="/image-20200501220559094.png" alt="image-20200501220559094" style="zoom:67%;" />
+
+实例：删除整个costomer索引数据
+
+删除前，所有的索引
+
+```
+green  open .kibana_task_manager_1   KWLtjcKRRuaV9so_v15WYg 1 0 2 0 39.8kb 39.8kb
+green  open .apm-agent-configuration cuwCpJ5ER0OYsSgAJ7bVYA 1 0 0 0   283b   283b
+green  open .kibana_1                PqK_LdUYRpWMy4fK0tMSPw 1 0 7 0 31.2kb 31.2kb
+yellow open customer                 nzDYCdnvQjSsapJrAIT8Zw 1 1 4 0  4.4kb  4.4kb
+```
+
+删除“ customer ”索引
+
+![image-20200501221105476](/image-20200501221105476.png)
+
+删除后，所有的索引
+
+```
+green  open .kibana_task_manager_1   KWLtjcKRRuaV9so_v15WYg 1 0 2 0 39.8kb 39.8kb
+green  open .apm-agent-configuration cuwCpJ5ER0OYsSgAJ7bVYA 1 0 0 0   283b   283b
+green  open .kibana_1                PqK_LdUYRpWMy4fK0tMSPw 1 0 7 0 31.2kb 31.2kb
+```
+
+
+
+#### 1.3.7 eleasticsearch的批量操作——bulk
+
+语法格式：
+
+```json
+{action:{metadata}}\n
+{request body  }\n
+
+{action:{metadata}}\n
+{request body  }\n
+```
+
+这里的批量操作，当发生某一条执行发生失败时，其他的数据仍然能够接着执行，也就是说彼此之间是独立的。
+
+bulk api以此按顺序执行所有的action（动作）。如果一个单个的动作因任何原因失败，它将继续处理它后面剩余的动作。当bulk api返回时，它将提供每个动作的状态（与发送的顺序相同），所以您可以检查是否一个指定的动作是否失败了。
+
+实例1: 执行多条数据
+
+
+```json
 POST customer/external/_bulk
 {"index":{"_id":"1"}}
 {"name":"John Doe"}
@@ -256,18 +583,58 @@ POST customer/external/_bulk
 {"name":"John Doe"}
 ```
 
-语法格式
+执行结果
 
 ```json
-{action:{metadata}}\n
-{requeestBody}\n
-{action:{metadata}}\n
-{requesetbod }\n
+#! Deprecation: [types removal] Specifying types in bulk requests is deprecated.
+{
+  "took" : 491,
+  "errors" : false,
+  "items" : [
+    {
+      "index" : {
+        "_index" : "customer",
+        "_type" : "external",
+        "_id" : "1",
+        "_version" : 1,
+        "result" : "created",
+        "_shards" : {
+          "total" : 2,
+          "successful" : 1,
+          "failed" : 0
+        },
+        "_seq_no" : 0,
+        "_primary_term" : 1,
+        "status" : 201
+      }
+    },
+    {
+      "index" : {
+        "_index" : "customer",
+        "_type" : "external",
+        "_id" : "2",
+        "_version" : 1,
+        "result" : "created",
+        "_shards" : {
+          "total" : 2,
+          "successful" : 1,
+          "failed" : 0
+        },
+        "_seq_no" : 1,
+        "_primary_term" : 1,
+        "status" : 201
+      }
+    }
+  ]
+}
+
 ```
 
-复杂实例：
 
-```http
+
+实例2：对于整个索引执行批量操作
+
+```json
 POST /_bulk
 {"delete":{"_index":"website","_type":"blog","_id":"123"}}
 {"create":{"_index":"website","_type":"blog","_id":"123"}}
@@ -278,9 +645,114 @@ POST /_bulk
 {"doc":{"title":"my updated blog post"}}
 ```
 
-bulk API以此按顺序执行所有的action (动作)。如果一一个单个的动作因任何原因而失败，它将继续处理它后面剩余的动作。当bulkAPI 返回时，它将提供每个动作的状态(与发送的顺序相同)，所以您可以检查是否一个指定的动作是不是失败了。
+运行结果：
 
-#### 1.3.7 样本测试数据
+```json
+#! Deprecation: [types removal] Specifying types in bulk requests is deprecated.
+{
+  "took" : 608,
+  "errors" : false,
+  "items" : [
+    {
+      "delete" : {
+        "_index" : "website",
+        "_type" : "blog",
+        "_id" : "123",
+        "_version" : 1,
+        "result" : "not_found",
+        "_shards" : {
+          "total" : 2,
+          "successful" : 1,
+          "failed" : 0
+        },
+        "_seq_no" : 0,
+        "_primary_term" : 1,
+        "status" : 404
+      }
+    },
+    {
+      "create" : {
+        "_index" : "website",
+        "_type" : "blog",
+        "_id" : "123",
+        "_version" : 2,
+        "result" : "created",
+        "_shards" : {
+          "total" : 2,
+          "successful" : 1,
+          "failed" : 0
+        },
+        "_seq_no" : 1,
+        "_primary_term" : 1,
+        "status" : 201
+      }
+    },
+    {
+      "index" : {
+        "_index" : "website",
+        "_type" : "blog",
+        "_id" : "MCOs0HEBHYK_MJXUyYIz",
+        "_version" : 1,
+        "result" : "created",
+        "_shards" : {
+          "total" : 2,
+          "successful" : 1,
+          "failed" : 0
+        },
+        "_seq_no" : 2,
+        "_primary_term" : 1,
+        "status" : 201
+      }
+    },
+    {
+      "update" : {
+        "_index" : "website",
+        "_type" : "blog",
+        "_id" : "123",
+        "_version" : 3,
+        "result" : "updated",
+        "_shards" : {
+          "total" : 2,
+          "successful" : 1,
+          "failed" : 0
+        },
+        "_seq_no" : 3,
+        "_primary_term" : 1,
+        "status" : 200
+      }
+    }
+  ]
+}
+
+```
+
+
+
+#### 7）样本测试数据
+
+准备了一份顾客银行账户信息的虚构的JSON文档样本。每个文档都有下列的schema（模式）。
+
+```json
+{
+	"account_number": 1,
+	"balance": 39225,
+	"firstname": "Amber",
+	"lastname": "Duke",
+	"age": 32,
+	"gender": "M",
+	"address": "880 Holmes Lane",
+	"employer": "Pyrami",
+	"email": "amberduke@pyrami.com",
+	"city": "Brogan",
+	"state": "IL"
+}
+```
+
+ https://github.com/elastic/elasticsearch/blob/master/docs/src/test/resources/accounts.json ，导入测试数据，
+
+POST bank/account/_bulk
+
+#### 1.3.8 样本测试数据
 
 我准备了一份顾客银行账户信息虚构的 JSON 文档样本，每个用户都有下列的 schema （模式）：
 
@@ -304,11 +776,11 @@ https://github.com/elastic/elasticsearch/edit/master/docs/src/test/resources/acc
 
 导入测试数据
 
-POST bank/account/_bank
+POST bank/account/_bulk
 
 测试数据
 
-![image-20201026114903942](/image-20201026114903942.png)
+![image-20201026114903942](image-20201026114903942.png)
 
 
 
@@ -321,27 +793,27 @@ ES 支持两种基本方式检索:
 - 一个是通过使用 REST request URL,发送搜索参数，(uri + 检索参数)
 - 另一个是通过使用 REST request bod 来发送他们，(uri + 请求体)
 
-1、检索信息
-
 一切检索从_search开始
 
-GET /bank/_search 检索 bank 下的所有信息，包括 type 和 docs
+1. uri+检索参数
 
-GET /bank/_search?q=*&sort=account_number:asc 请求参数方式检索
+> GET /bank/_search 检索 bank 下的所有信息，包括 type 和 docs
+>
+> GET /bank/_search?q=*&sort=account_number:asc 请求参数方式检索
 
 响应结果解释
-took - Elasticearch执行搜索的时间(毫秒)
+> took - Elasticearch 执行搜索的时间(毫秒)
+>
+> time_ out - 告诉我们搜索是否超时
+>
+> _shards - 告诉我们多少个分片被搜索了，以及统计了成功/失败的搜索分片
+> hit - 搜索结果
+> hits.total - 搜索结果
+> hits.hits - 实际的搜索结果数组(默认为前10的文档)
+> sort - 结果的排序key (键) (没有则按 score 排序)
+> score 和 max score - 相关性得分和最高得分(全文检索用)
 
-time_ out - 告诉我们搜索是否超时
-
-_shards - 告诉我们多少个分片被搜索了，以及统计了成功/失败的搜索分片
-hit - 搜索结果
-hits.total - 搜索结果
-hits.hits - 实际的搜索结果数组(默认为前10的文档)
-sort - 结果的排序key (键) (没有则按 score 排序)
-score 和 max score - 相关性得分和最高得分(全文检索用)
-
-uri + 请求体进行检查
+2. uri + 请求体
 
 ```java
 GET /bank/_search
@@ -353,15 +825,297 @@ GET /bank/_search
 }
 ```
 
-HTTP 客户端工具（POSTMAN）,get请求不能携带请求体，我们变为 post也是一样的 我们 POST 一个 JSON风格的查询请求体到 _search API
+HTTP 客户端工具（POSTMAN）,get请求不能携带请求体，我们用 post也是一样的 我们 POST 一个 JSON风格的查询请求体到 _search API
 
-需要了解，一旦搜索结果被返回，ES 就完成了这次请求的搜索，并且不会维护任何服务端的资源或者结果的 cursor（游标）
+需要了解，一旦搜索结果被返回，ES 就完成了这次请求的搜索，并且不会维护任何服务端的资源或者结果的 cursor（游标）。
+
+```
+GET bank/_search?q=*&sort=account_number:asc
+```
+
+返回结果：
+
+```json
+{
+  "took" : 235,
+  "timed_out" : false,
+  "_shards" : {
+    "total" : 1,
+    "successful" : 1,
+    "skipped" : 0,
+    "failed" : 0
+  },
+  "hits" : {
+    "total" : {
+      "value" : 1000,
+      "relation" : "eq"
+    },
+    "max_score" : null,
+    "hits" : [
+      {
+        "_index" : "bank",
+        "_type" : "account",
+        "_id" : "0",
+        "_score" : null,
+        "_source" : {
+          "account_number" : 0,
+          "balance" : 16623,
+          "firstname" : "Bradshaw",
+          "lastname" : "Mckenzie",
+          "age" : 29,
+          "gender" : "F",
+          "address" : "244 Columbus Place",
+          "employer" : "Euron",
+          "email" : "bradshawmckenzie@euron.com",
+          "city" : "Hobucken",
+          "state" : "CO"
+        },
+        "sort" : [
+          0
+        ]
+      },
+      {
+        "_index" : "bank",
+        "_type" : "account",
+        "_id" : "1",
+        "_score" : null,
+        "_source" : {
+          "account_number" : 1,
+          "balance" : 39225,
+          "firstname" : "Amber",
+          "lastname" : "Duke",
+          "age" : 32,
+          "gender" : "M",
+          "address" : "880 Holmes Lane",
+          "employer" : "Pyrami",
+          "email" : "amberduke@pyrami.com",
+          "city" : "Brogan",
+          "state" : "IL"
+        },
+        "sort" : [
+          1
+        ]
+      },
+      {
+        "_index" : "bank",
+        "_type" : "account",
+        "_id" : "2",
+        "_score" : null,
+        "_source" : {
+          "account_number" : 2,
+          "balance" : 28838,
+          "firstname" : "Roberta",
+          "lastname" : "Bender",
+          "age" : 22,
+          "gender" : "F",
+          "address" : "560 Kingsway Place",
+          "employer" : "Chillium",
+          "email" : "robertabender@chillium.com",
+          "city" : "Bennett",
+          "state" : "LA"
+        },
+        "sort" : [
+          2
+        ]
+      },
+      {
+        "_index" : "bank",
+        "_type" : "account",
+        "_id" : "3",
+        "_score" : null,
+        "_source" : {
+          "account_number" : 3,
+          "balance" : 44947,
+          "firstname" : "Levine",
+          "lastname" : "Burks",
+          "age" : 26,
+          "gender" : "F",
+          "address" : "328 Wilson Avenue",
+          "employer" : "Amtap",
+          "email" : "levineburks@amtap.com",
+          "city" : "Cochranville",
+          "state" : "HI"
+        },
+        "sort" : [
+          3
+        ]
+      },
+      {
+        "_index" : "bank",
+        "_type" : "account",
+        "_id" : "4",
+        "_score" : null,
+        "_source" : {
+          "account_number" : 4,
+          "balance" : 27658,
+          "firstname" : "Rodriquez",
+          "lastname" : "Flores",
+          "age" : 31,
+          "gender" : "F",
+          "address" : "986 Wyckoff Avenue",
+          "employer" : "Tourmania",
+          "email" : "rodriquezflores@tourmania.com",
+          "city" : "Eastvale",
+          "state" : "HI"
+        },
+        "sort" : [
+          4
+        ]
+      },
+      {
+        "_index" : "bank",
+        "_type" : "account",
+        "_id" : "5",
+        "_score" : null,
+        "_source" : {
+          "account_number" : 5,
+          "balance" : 29342,
+          "firstname" : "Leola",
+          "lastname" : "Stewart",
+          "age" : 30,
+          "gender" : "F",
+          "address" : "311 Elm Place",
+          "employer" : "Diginetic",
+          "email" : "leolastewart@diginetic.com",
+          "city" : "Fairview",
+          "state" : "NJ"
+        },
+        "sort" : [
+          5
+        ]
+      },
+      {
+        "_index" : "bank",
+        "_type" : "account",
+        "_id" : "6",
+        "_score" : null,
+        "_source" : {
+          "account_number" : 6,
+          "balance" : 5686,
+          "firstname" : "Hattie",
+          "lastname" : "Bond",
+          "age" : 36,
+          "gender" : "M",
+          "address" : "671 Bristol Street",
+          "employer" : "Netagy",
+          "email" : "hattiebond@netagy.com",
+          "city" : "Dante",
+          "state" : "TN"
+        },
+        "sort" : [
+          6
+        ]
+      },
+      {
+        "_index" : "bank",
+        "_type" : "account",
+        "_id" : "7",
+        "_score" : null,
+        "_source" : {
+          "account_number" : 7,
+          "balance" : 39121,
+          "firstname" : "Levy",
+          "lastname" : "Richard",
+          "age" : 22,
+          "gender" : "M",
+          "address" : "820 Logan Street",
+          "employer" : "Teraprene",
+          "email" : "levyrichard@teraprene.com",
+          "city" : "Shrewsbury",
+          "state" : "MO"
+        },
+        "sort" : [
+          7
+        ]
+      },
+      {
+        "_index" : "bank",
+        "_type" : "account",
+        "_id" : "8",
+        "_score" : null,
+        "_source" : {
+          "account_number" : 8,
+          "balance" : 48868,
+          "firstname" : "Jan",
+          "lastname" : "Burns",
+          "age" : 35,
+          "gender" : "M",
+          "address" : "699 Visitation Place",
+          "employer" : "Glasstep",
+          "email" : "janburns@glasstep.com",
+          "city" : "Wakulla",
+          "state" : "AZ"
+        },
+        "sort" : [
+          8
+        ]
+      },
+      {
+        "_index" : "bank",
+        "_type" : "account",
+        "_id" : "9",
+        "_score" : null,
+        "_source" : {
+          "account_number" : 9,
+          "balance" : 24776,
+          "firstname" : "Opal",
+          "lastname" : "Meadows",
+          "age" : 39,
+          "gender" : "M",
+          "address" : "963 Neptune Avenue",
+          "employer" : "Cedward",
+          "email" : "opalmeadows@cedward.com",
+          "city" : "Olney",
+          "state" : "OH"
+        },
+        "sort" : [
+          9
+        ]
+      }
+    ]
+  }
+}
+
+```
+
+1）只有6条数据，这是因为存在分页查询；
+
+使用`from`和`size`可以指定查询
+
+```http
+GET /bank/_search
+{
+  "query": { "match_all": {} },
+  "sort": [
+    { "account_number": "asc" },
+    {"balance":"desc"}
+  ],
+  "from": 20,
+  "size": 10
+}
+```
+
+
+
+（2）详细的字段信息，参照： https://www.elastic.co/guide/en/elasticsearch/reference/current/getting-started-search.html 
+
+>
+>
+>The response also provides the following information about the search request:
+>
+>- `took` – how long it took Elasticsearch to run the query, in milliseconds
+>- `timed_out` – whether or not the search request timed out
+>- `_shards` – how many shards were searched and a breakdown of how many shards succeeded, failed, or were skipped.
+>- `max_score` – the score of the most relevant document found
+>- `hits.total.value` - how many matching documents were found
+>- `hits.sort` - the document’s sort position (when not sorting by relevance score)
+>- `hits._score` - the document’s relevance score (not applicable when using `match_all`)
 
 #### 1.4.2、QueryDSL
 
 ##### 1、基本语法格式
 
-ES 提供了一个可以执行查询的 Json 风格的 DSL （domain-specifig langurage 领域特定语言），这个被成为 Query DSL ，该查询语言非常全面，并且刚开始的时候优点复杂，真正学好对他的方法是从一些基础的示例开始的
+ES 提供了一个可以执行查询的 Json 风格的 DSL （domain-specifig langurage 领域特定语言），这个被成为 Query DSL ，该查询语言非常全面。
 
 一个查询语句 的典型结构
 
@@ -401,13 +1155,14 @@ GET /bank/_search
 
 query 定义如何查询
 
-match_all 查询类型【代表查询所有的所有】，es中可以在 query中 组合非常多的查询类型完成复杂查询
+- match_all 查询类型【代表查询所有的所有】，es中可以在 query中 组合非常多的查询类型完成复杂查询
 
-除了 query 参数之外，我们也可以传递其他的参数改变查询结构，如 sort，size
+- 除了 query 参数之外，我们也可以传递其他的参数改变查询结构，如 sort，size
 
-from + size 限定，完成分页功能
+- from + size 限定，完成分页功能
 
-sort排序，多字段排序，会在前序字段相等时后续字段内部排序，否则以前序为准
+- sort排序，多字段排序，会在前序字段相等时后续字段内部排序，否则以前序为准
+
 
 ##### 2、返回部分字段
 
@@ -430,33 +1185,467 @@ sort排序，多字段排序，会在前序字段相等时后续字段内部排�
  }
 ```
 
+查询结果：
+
+```json
+{
+  "took" : 18,
+  "timed_out" : false,
+  "_shards" : {
+    "total" : 1,
+    "successful" : 1,
+    "skipped" : 0,
+    "failed" : 0
+  },
+  "hits" : {
+    "total" : {
+      "value" : 1000,
+      "relation" : "eq"
+    },
+    "max_score" : null,
+    "hits" : [
+      {
+        "_index" : "bank",
+        "_type" : "account",
+        "_id" : "999",
+        "_score" : null,
+        "_source" : {
+          "firstname" : "Dorothy",
+          "balance" : 6087
+        },
+        "sort" : [
+          999
+        ]
+      },
+      {
+        "_index" : "bank",
+        "_type" : "account",
+        "_id" : "998",
+        "_score" : null,
+        "_source" : {
+          "firstname" : "Letha",
+          "balance" : 16869
+        },
+        "sort" : [
+          998
+        ]
+      },
+      {
+        "_index" : "bank",
+        "_type" : "account",
+        "_id" : "997",
+        "_score" : null,
+        "_source" : {
+          "firstname" : "Combs",
+          "balance" : 25311
+        },
+        "sort" : [
+          997
+        ]
+      },
+      {
+        "_index" : "bank",
+        "_type" : "account",
+        "_id" : "996",
+        "_score" : null,
+        "_source" : {
+          "firstname" : "Andrews",
+          "balance" : 17541
+        },
+        "sort" : [
+          996
+        ]
+      },
+      {
+        "_index" : "bank",
+        "_type" : "account",
+        "_id" : "995",
+        "_score" : null,
+        "_source" : {
+          "firstname" : "Phelps",
+          "balance" : 21153
+        },
+        "sort" : [
+          995
+        ]
+      }
+    ]
+  }
+}
+
+```
+
 ##### 3、match【匹配查询】
 
-基本类型(非字符串)，精准匹配
+* 基本类型（非字符串），精确控制
 
-```http
+```json
 GET bank/_search
 {
-  "query":{
-   "match": {
-     "address": "mill lane"
-   } 
+  "query": {
+    "match": {
+      "account_number": "20"
+    }
+  }
+}
+
+```
+
+match返回account_number=20的数据。
+
+查询结果：
+
+```json
+{
+  "took" : 1,
+  "timed_out" : false,
+  "_shards" : {
+    "total" : 1,
+    "successful" : 1,
+    "skipped" : 0,
+    "failed" : 0
+  },
+  "hits" : {
+    "total" : {
+      "value" : 1,
+      "relation" : "eq"
+    },
+    "max_score" : 1.0,
+    "hits" : [
+      {
+        "_index" : "bank",
+        "_type" : "account",
+        "_id" : "20",
+        "_score" : 1.0,
+        "_source" : {
+          "account_number" : 20,
+          "balance" : 16418,
+          "firstname" : "Elinor",
+          "lastname" : "Ratliff",
+          "age" : 36,
+          "gender" : "M",
+          "address" : "282 Kings Place",
+          "employer" : "Scentric",
+          "email" : "elinorratliff@scentric.com",
+          "city" : "Ribera",
+          "state" : "WA"
+        }
+      }
+    ]
+  }
+}
+
+```
+
+
+
+
+
+
+
+* 字符串，全文检索
+
+```json
+GET bank/_search
+{
+  "query": {
+    "match": {
+      "address": "kings"
+    }
   }
 }
 ```
 
-全文检索按照评分进行排序，会对检索条件进行分词匹配
+全文检索，最终会按照评分进行排序，会对检索条件进行分词匹配。
+
+查询结果：
+
+```json
+{
+  "took" : 30,
+  "timed_out" : false,
+  "_shards" : {
+    "total" : 1,
+    "successful" : 1,
+    "skipped" : 0,
+    "failed" : 0
+  },
+  "hits" : {
+    "total" : {
+      "value" : 2,
+      "relation" : "eq"
+    },
+    "max_score" : 5.990829,
+    "hits" : [
+      {
+        "_index" : "bank",
+        "_type" : "account",
+        "_id" : "20",
+        "_score" : 5.990829,
+        "_source" : {
+          "account_number" : 20,
+          "balance" : 16418,
+          "firstname" : "Elinor",
+          "lastname" : "Ratliff",
+          "age" : 36,
+          "gender" : "M",
+          "address" : "282 Kings Place",
+          "employer" : "Scentric",
+          "email" : "elinorratliff@scentric.com",
+          "city" : "Ribera",
+          "state" : "WA"
+        }
+      },
+      {
+        "_index" : "bank",
+        "_type" : "account",
+        "_id" : "722",
+        "_score" : 5.990829,
+        "_source" : {
+          "account_number" : 722,
+          "balance" : 27256,
+          "firstname" : "Roberts",
+          "lastname" : "Beasley",
+          "age" : 34,
+          "gender" : "F",
+          "address" : "305 Kings Hwy",
+          "employer" : "Quintity",
+          "email" : "robertsbeasley@quintity.com",
+          "city" : "Hayden",
+          "state" : "PA"
+        }
+      }
+    ]
+  }
+}
+
+```
 
 ##### 4、match_phrase【短语匹配】
 
-将需要匹配的值当成一个整体单词（不分词）进行检索
+将需要匹配的值当成一整个单词（不分词）进行检索
 
-```http
-GET /bank/_search
+```json
+GET bank/_search
 {
-  "query": { "match_phrase": { "address": "mill lane" } }
+  "query": {
+    "match_phrase": {
+      "address": "mill road"
+    }
+  }
 }
 ```
+
+查处address中包含mill_road的所有记录，并给出相关性得分
+
+查看结果：
+
+```json
+{
+  "took" : 32,
+  "timed_out" : false,
+  "_shards" : {
+    "total" : 1,
+    "successful" : 1,
+    "skipped" : 0,
+    "failed" : 0
+  },
+  "hits" : {
+    "total" : {
+      "value" : 1,
+      "relation" : "eq"
+    },
+    "max_score" : 8.926605,
+    "hits" : [
+      {
+        "_index" : "bank",
+        "_type" : "account",
+        "_id" : "970",
+        "_score" : 8.926605,
+        "_source" : {
+          "account_number" : 970,
+          "balance" : 19648,
+          "firstname" : "Forbes",
+          "lastname" : "Wallace",
+          "age" : 28,
+          "gender" : "M",
+          "address" : "990 Mill Road",
+          "employer" : "Pheast",
+          "email" : "forbeswallace@pheast.com",
+          "city" : "Lopezo",
+          "state" : "AK"
+        }
+      }
+    ]
+  }
+}
+
+```
+
+
+
+match_phrase和Match的区别，观察如下实例：
+
+```json
+GET bank/_search
+{
+  "query": {
+    "match_phrase": {
+      "address": "990 Mill"
+    }
+  }
+}
+```
+
+查询结果：
+
+```json
+{
+  "took" : 0,
+  "timed_out" : false,
+  "_shards" : {
+    "total" : 1,
+    "successful" : 1,
+    "skipped" : 0,
+    "failed" : 0
+  },
+  "hits" : {
+    "total" : {
+      "value" : 1,
+      "relation" : "eq"
+    },
+    "max_score" : 10.806405,
+    "hits" : [
+      {
+        "_index" : "bank",
+        "_type" : "account",
+        "_id" : "970",
+        "_score" : 10.806405,
+        "_source" : {
+          "account_number" : 970,
+          "balance" : 19648,
+          "firstname" : "Forbes",
+          "lastname" : "Wallace",
+          "age" : 28,
+          "gender" : "M",
+          "address" : "990 Mill Road",
+          "employer" : "Pheast",
+          "email" : "forbeswallace@pheast.com",
+          "city" : "Lopezo",
+          "state" : "AK"
+        }
+      }
+    ]
+  }
+}
+
+```
+
+
+
+使用match的keyword
+
+```json
+GET bank/_search
+{
+  "query": {
+    "match": {
+      "address.keyword": "990 Mill"
+    }
+  }
+}
+```
+
+查询结果，一条也未匹配到
+
+```json
+{
+  "took" : 0,
+  "timed_out" : false,
+  "_shards" : {
+    "total" : 1,
+    "successful" : 1,
+    "skipped" : 0,
+    "failed" : 0
+  },
+  "hits" : {
+    "total" : {
+      "value" : 0,
+      "relation" : "eq"
+    },
+    "max_score" : null,
+    "hits" : [ ]
+  }
+}
+
+```
+
+
+
+修改匹配条件为“990 Mill Road”
+
+```json
+GET bank/_search
+{
+  "query": {
+    "match": {
+      "address.keyword": "990 Mill Road"
+    }
+  }
+}
+```
+
+查询出一条数据
+
+```json
+{
+  "took" : 1,
+  "timed_out" : false,
+  "_shards" : {
+    "total" : 1,
+    "successful" : 1,
+    "skipped" : 0,
+    "failed" : 0
+  },
+  "hits" : {
+    "total" : {
+      "value" : 1,
+      "relation" : "eq"
+    },
+    "max_score" : 6.5032897,
+    "hits" : [
+      {
+        "_index" : "bank",
+        "_type" : "account",
+        "_id" : "970",
+        "_score" : 6.5032897,
+        "_source" : {
+          "account_number" : 970,
+          "balance" : 19648,
+          "firstname" : "Forbes",
+          "lastname" : "Wallace",
+          "age" : 28,
+          "gender" : "M",
+          "address" : "990 Mill Road",
+          "employer" : "Pheast",
+          "email" : "forbeswallace@pheast.com",
+          "city" : "Lopezo",
+          "state" : "AK"
+        }
+      }
+    ]
+  }
+}
+
+```
+
+
+
+文本字段的匹配，使用keyword，匹配的条件就是要显示字段的全部值，要进行精确匹配的。
+
+match_phrase是做短语匹配，只要文本中包含匹配条件，就能匹配到。
+
+> 思考：猜测，短语匹配和使用match.key的精确匹配虽然看似没有用到分词匹配（倒排索引）。但实际执行时，也可以先用分词匹配筛选出可能的记录，在这些已查出的记录中，再进行短语匹配或精确匹配。
 
 ##### 5、multi_match【多字段匹配】
 
@@ -470,6 +1659,109 @@ GET bank/_search
     }
   }
 }
+```
+
+state或者address中包含mill，并且在查询过程中，会对于查询条件进行分词。
+
+查询结果：
+
+```json
+{
+  "took" : 28,
+  "timed_out" : false,
+  "_shards" : {
+    "total" : 1,
+    "successful" : 1,
+    "skipped" : 0,
+    "failed" : 0
+  },
+  "hits" : {
+    "total" : {
+      "value" : 4,
+      "relation" : "eq"
+    },
+    "max_score" : 5.4032025,
+    "hits" : [
+      {
+        "_index" : "bank",
+        "_type" : "account",
+        "_id" : "970",
+        "_score" : 5.4032025,
+        "_source" : {
+          "account_number" : 970,
+          "balance" : 19648,
+          "firstname" : "Forbes",
+          "lastname" : "Wallace",
+          "age" : 28,
+          "gender" : "M",
+          "address" : "990 Mill Road",
+          "employer" : "Pheast",
+          "email" : "forbeswallace@pheast.com",
+          "city" : "Lopezo",
+          "state" : "AK"
+        }
+      },
+      {
+        "_index" : "bank",
+        "_type" : "account",
+        "_id" : "136",
+        "_score" : 5.4032025,
+        "_source" : {
+          "account_number" : 136,
+          "balance" : 45801,
+          "firstname" : "Winnie",
+          "lastname" : "Holland",
+          "age" : 38,
+          "gender" : "M",
+          "address" : "198 Mill Lane",
+          "employer" : "Neteria",
+          "email" : "winnieholland@neteria.com",
+          "city" : "Urie",
+          "state" : "IL"
+        }
+      },
+      {
+        "_index" : "bank",
+        "_type" : "account",
+        "_id" : "345",
+        "_score" : 5.4032025,
+        "_source" : {
+          "account_number" : 345,
+          "balance" : 9812,
+          "firstname" : "Parker",
+          "lastname" : "Hines",
+          "age" : 38,
+          "gender" : "M",
+          "address" : "715 Mill Avenue",
+          "employer" : "Baluba",
+          "email" : "parkerhines@baluba.com",
+          "city" : "Blackgum",
+          "state" : "KY"
+        }
+      },
+      {
+        "_index" : "bank",
+        "_type" : "account",
+        "_id" : "472",
+        "_score" : 5.4032025,
+        "_source" : {
+          "account_number" : 472,
+          "balance" : 25571,
+          "firstname" : "Lee",
+          "lastname" : "Long",
+          "age" : 32,
+          "gender" : "F",
+          "address" : "288 Mill Street",
+          "employer" : "Comverges",
+          "email" : "leelong@comverges.com",
+          "city" : "Movico",
+          "state" : "MT"
+        }
+      }
+    ]
+  }
+}
+
 ```
 
 ##### 6、bool 【复合查询】
@@ -511,7 +1803,15 @@ GET /bank/_search
   }
 }
 ```
+- must_not 必须不是指定的情况
 
+```json
+"must_not": [
+        {"match":{
+          "age":"18"
+        }}
+      ],
+```
 - should:应该达到 should 列举的条件，如果达到会增加相关文档的评分，并不会改变查询的结果，如果 query 中只有 should 且只有一种匹配规则，那么 should的条件就会被作为默认匹配条件而区改变查询结果
 
 ```json
@@ -522,17 +1822,325 @@ GET /bank/_search
       ]
 ```
 
-- must_not 必须不是指定的情况
+
+
+![image-20201026052225903](image-20201026052225903.png)
+
+实例：查询gender=m，并且address=mill的数据
 
 ```json
-"must_not": [
-        {"match":{
-          "age":"18"
-        }}
-      ],
+GET bank/_search
+{
+  "query": {
+    "bool": {
+      "must": [
+        {
+          "match": {
+            "gender": "M"
+          }
+        },
+        {
+          "match": {
+            "address": "mill"
+          }
+        }
+      ]
+    }
+  }
+}
 ```
 
-![image-20201026052225903](/image-20201026052225903.png)
+查询结果：
+
+```json
+{
+  "took" : 1,
+  "timed_out" : false,
+  "_shards" : {
+    "total" : 1,
+    "successful" : 1,
+    "skipped" : 0,
+    "failed" : 0
+  },
+  "hits" : {
+    "total" : {
+      "value" : 3,
+      "relation" : "eq"
+    },
+    "max_score" : 6.0824604,
+    "hits" : [
+      {
+        "_index" : "bank",
+        "_type" : "account",
+        "_id" : "970",
+        "_score" : 6.0824604,
+        "_source" : {
+          "account_number" : 970,
+          "balance" : 19648,
+          "firstname" : "Forbes",
+          "lastname" : "Wallace",
+          "age" : 28,
+          "gender" : "M",
+          "address" : "990 Mill Road",
+          "employer" : "Pheast",
+          "email" : "forbeswallace@pheast.com",
+          "city" : "Lopezo",
+          "state" : "AK"
+        }
+      },
+      {
+        "_index" : "bank",
+        "_type" : "account",
+        "_id" : "136",
+        "_score" : 6.0824604,
+        "_source" : {
+          "account_number" : 136,
+          "balance" : 45801,
+          "firstname" : "Winnie",
+          "lastname" : "Holland",
+          "age" : 38,
+          "gender" : "M",
+          "address" : "198 Mill Lane",
+          "employer" : "Neteria",
+          "email" : "winnieholland@neteria.com",
+          "city" : "Urie",
+          "state" : "IL"
+        }
+      },
+      {
+        "_index" : "bank",
+        "_type" : "account",
+        "_id" : "345",
+        "_score" : 6.0824604,
+        "_source" : {
+          "account_number" : 345,
+          "balance" : 9812,
+          "firstname" : "Parker",
+          "lastname" : "Hines",
+          "age" : 38,
+          "gender" : "M",
+          "address" : "715 Mill Avenue",
+          "employer" : "Baluba",
+          "email" : "parkerhines@baluba.com",
+          "city" : "Blackgum",
+          "state" : "KY"
+        }
+      }
+    ]
+  }
+}
+
+```
+
+**must_not：必须不是指定的情况**
+
+实例：查询gender=m，并且address=mill的数据，但是age不等于38的
+
+```json
+
+GET bank/_search
+{
+  "query": {
+    "bool": {
+      "must": [
+        {
+          "match": {
+            "gender": "M"
+          }
+        },
+        {
+          "match": {
+            "address": "mill"
+          }
+        }
+      ],
+      "must_not": [
+        {
+          "match": {
+            "age": "38"
+          }
+        }
+      ]
+    }
+  }
+
+```
+
+查询结果：
+
+```json
+{
+  "took" : 4,
+  "timed_out" : false,
+  "_shards" : {
+    "total" : 1,
+    "successful" : 1,
+    "skipped" : 0,
+    "failed" : 0
+  },
+  "hits" : {
+    "total" : {
+      "value" : 1,
+      "relation" : "eq"
+    },
+    "max_score" : 6.0824604,
+    "hits" : [
+      {
+        "_index" : "bank",
+        "_type" : "account",
+        "_id" : "970",
+        "_score" : 6.0824604,
+        "_source" : {
+          "account_number" : 970,
+          "balance" : 19648,
+          "firstname" : "Forbes",
+          "lastname" : "Wallace",
+          "age" : 28,
+          "gender" : "M",
+          "address" : "990 Mill Road",
+          "employer" : "Pheast",
+          "email" : "forbeswallace@pheast.com",
+          "city" : "Lopezo",
+          "state" : "AK"
+        }
+      }
+    ]
+  }
+}
+
+```
+
+
+
+
+
+**should：应该达到should列举的条件，如果到达会增加相关文档的评分，并不会改变查询的结果。如果query中只有should且只有一种匹配规则，那么should的条件就会被作为默认匹配条件二区改变查询结果。**
+
+实例：匹配lastName应该等于Wallace的数据
+
+```json
+GET bank/_search
+{
+  "query": {
+    "bool": {
+      "must": [
+        {
+          "match": {
+            "gender": "M"
+          }
+        },
+        {
+          "match": {
+            "address": "mill"
+          }
+        }
+      ],
+      "must_not": [
+        {
+          "match": {
+            "age": "18"
+          }
+        }
+      ],
+      "should": [
+        {
+          "match": {
+            "lastname": "Wallace"
+          }
+        }
+      ]
+    }
+  }
+}
+```
+
+
+
+查询结果：
+
+```json
+{
+  "took" : 5,
+  "timed_out" : false,
+  "_shards" : {
+    "total" : 1,
+    "successful" : 1,
+    "skipped" : 0,
+    "failed" : 0
+  },
+  "hits" : {
+    "total" : {
+      "value" : 3,
+      "relation" : "eq"
+    },
+    "max_score" : 12.585751,
+    "hits" : [
+      {
+        "_index" : "bank",
+        "_type" : "account",
+        "_id" : "970",
+        "_score" : 12.585751,
+        "_source" : {
+          "account_number" : 970,
+          "balance" : 19648,
+          "firstname" : "Forbes",
+          "lastname" : "Wallace",
+          "age" : 28,
+          "gender" : "M",
+          "address" : "990 Mill Road",
+          "employer" : "Pheast",
+          "email" : "forbeswallace@pheast.com",
+          "city" : "Lopezo",
+          "state" : "AK"
+        }
+      },
+      {
+        "_index" : "bank",
+        "_type" : "account",
+        "_id" : "136",
+        "_score" : 6.0824604,
+        "_source" : {
+          "account_number" : 136,
+          "balance" : 45801,
+          "firstname" : "Winnie",
+          "lastname" : "Holland",
+          "age" : 38,
+          "gender" : "M",
+          "address" : "198 Mill Lane",
+          "employer" : "Neteria",
+          "email" : "winnieholland@neteria.com",
+          "city" : "Urie",
+          "state" : "IL"
+        }
+      },
+      {
+        "_index" : "bank",
+        "_type" : "account",
+        "_id" : "345",
+        "_score" : 6.0824604,
+        "_source" : {
+          "account_number" : 345,
+          "balance" : 9812,
+          "firstname" : "Parker",
+          "lastname" : "Hines",
+          "age" : 38,
+          "gender" : "M",
+          "address" : "715 Mill Avenue",
+          "employer" : "Baluba",
+          "email" : "parkerhines@baluba.com",
+          "city" : "Blackgum",
+          "state" : "KY"
+        }
+      }
+    ]
+  }
+}
+
+```
+
+能够看到相关度越高，得分也越高。
+
+
 
 ##### 7、filter【结果过滤】
 
@@ -547,8 +2155,8 @@ GET /bank/_search
       "filter": {
         "range": {
           "balance": {
-            "gte": 20000,
-            "lte": 30000
+            "gte": 10000,
+            "lte": 20000
           }
         }
       }
@@ -557,26 +2165,397 @@ GET /bank/_search
 }
 ```
 
-##### 8、term
+这里先是查询所有匹配address=mill的文档，然后再根据10000<=balance<=20000进行过滤查询结果
 
-和 match 一样，匹配某个属性的值，全文检索字段用 match，其他非text字段匹配用 term
+查询结果：
 
-```http
+```json
+{
+  "took" : 2,
+  "timed_out" : false,
+  "_shards" : {
+    "total" : 1,
+    "successful" : 1,
+    "skipped" : 0,
+    "failed" : 0
+  },
+  "hits" : {
+    "total" : {
+      "value" : 1,
+      "relation" : "eq"
+    },
+    "max_score" : 5.4032025,
+    "hits" : [
+      {
+        "_index" : "bank",
+        "_type" : "account",
+        "_id" : "970",
+        "_score" : 5.4032025,
+        "_source" : {
+          "account_number" : 970,
+          "balance" : 19648,
+          "firstname" : "Forbes",
+          "lastname" : "Wallace",
+          "age" : 28,
+          "gender" : "M",
+          "address" : "990 Mill Road",
+          "employer" : "Pheast",
+          "email" : "forbeswallace@pheast.com",
+          "city" : "Lopezo",
+          "state" : "AK"
+        }
+      }
+    ]
+  }
+}
+
+```
+
+
+
+Each `must`, `should`, and `must_not` element in a Boolean query is referred to as a query clause. How well a document meets the criteria in each `must` or `should` clause contributes to the document’s *relevance score*. The higher the score, the better the document matches your search criteria. By default, Elasticsearch returns documents ranked by these relevance scores.
+
+ 在boolean查询中，`must`, `should` 和`must_not` 元素都被称为查询子句 。 文档是否符合每个“must”或“should”子句中的标准，决定了文档的“相关性得分”。  得分越高，文档越符合您的搜索条件。  默认情况下，Elasticsearch返回根据这些相关性得分排序的文档。 
+
+The criteria in a `must_not` clause is treated as a *filter*. It affects whether or not the document is included in the results, but does not contribute to how documents are scored. You can also explicitly specify arbitrary filters to include or exclude documents based on structured data.
+
+`“must_not”子句中的条件被视为“过滤器”。` 它影响文档是否包含在结果中，  但不影响文档的评分方式。  还可以显式地指定任意过滤器来包含或排除基于结构化数据的文档。 
+
+
+
+filter在使用过程中，并不会计算相关性得分：
+
+```json
 GET bank/_search
 {
-  "query":{
-    "match_phrase": {
-      "address": "789 Madison Street"
+  "query": {
+    "bool": {
+      "must": [
+        {
+          "match": {
+            "address": "mill"
+          }
+        }
+      ],
+      "filter": {
+        "range": {
+          "balance": {
+            "gte": "10000",
+            "lte": "20000"
+          }
+        }
+      }
     }
   }
 }
 ```
 
+查询结果：
+
+```json
+{
+  "took" : 1,
+  "timed_out" : false,
+  "_shards" : {
+    "total" : 1,
+    "successful" : 1,
+    "skipped" : 0,
+    "failed" : 0
+  },
+  "hits" : {
+    "total" : {
+      "value" : 213,
+      "relation" : "eq"
+    },
+    "max_score" : 0.0,
+    "hits" : [
+      {
+        "_index" : "bank",
+        "_type" : "account",
+        "_id" : "20",
+        "_score" : 0.0,
+        "_source" : {
+          "account_number" : 20,
+          "balance" : 16418,
+          "firstname" : "Elinor",
+          "lastname" : "Ratliff",
+          "age" : 36,
+          "gender" : "M",
+          "address" : "282 Kings Place",
+          "employer" : "Scentric",
+          "email" : "elinorratliff@scentric.com",
+          "city" : "Ribera",
+          "state" : "WA"
+        }
+      },
+      {
+        "_index" : "bank",
+        "_type" : "account",
+        "_id" : "37",
+        "_score" : 0.0,
+        "_source" : {
+          "account_number" : 37,
+          "balance" : 18612,
+          "firstname" : "Mcgee",
+          "lastname" : "Mooney",
+          "age" : 39,
+          "gender" : "M",
+          "address" : "826 Fillmore Place",
+          "employer" : "Reversus",
+          "email" : "mcgeemooney@reversus.com",
+          "city" : "Tooleville",
+          "state" : "OK"
+        }
+      },
+      {
+        "_index" : "bank",
+        "_type" : "account",
+        "_id" : "51",
+        "_score" : 0.0,
+        "_source" : {
+          "account_number" : 51,
+          "balance" : 14097,
+          "firstname" : "Burton",
+          "lastname" : "Meyers",
+          "age" : 31,
+          "gender" : "F",
+          "address" : "334 River Street",
+          "employer" : "Bezal",
+          "email" : "burtonmeyers@bezal.com",
+          "city" : "Jacksonburg",
+          "state" : "MO"
+        }
+      },
+      {
+        "_index" : "bank",
+        "_type" : "account",
+        "_id" : "56",
+        "_score" : 0.0,
+        "_source" : {
+          "account_number" : 56,
+          "balance" : 14992,
+          "firstname" : "Josie",
+          "lastname" : "Nelson",
+          "age" : 32,
+          "gender" : "M",
+          "address" : "857 Tabor Court",
+          "employer" : "Emtrac",
+          "email" : "josienelson@emtrac.com",
+          "city" : "Sunnyside",
+          "state" : "UT"
+        }
+      },
+      {
+        "_index" : "bank",
+        "_type" : "account",
+        "_id" : "121",
+        "_score" : 0.0,
+        "_source" : {
+          "account_number" : 121,
+          "balance" : 19594,
+          "firstname" : "Acevedo",
+          "lastname" : "Dorsey",
+          "age" : 32,
+          "gender" : "M",
+          "address" : "479 Nova Court",
+          "employer" : "Netropic",
+          "email" : "acevedodorsey@netropic.com",
+          "city" : "Islandia",
+          "state" : "CT"
+        }
+      },
+      {
+        "_index" : "bank",
+        "_type" : "account",
+        "_id" : "176",
+        "_score" : 0.0,
+        "_source" : {
+          "account_number" : 176,
+          "balance" : 18607,
+          "firstname" : "Kemp",
+          "lastname" : "Walters",
+          "age" : 28,
+          "gender" : "F",
+          "address" : "906 Howard Avenue",
+          "employer" : "Eyewax",
+          "email" : "kempwalters@eyewax.com",
+          "city" : "Why",
+          "state" : "KY"
+        }
+      },
+      {
+        "_index" : "bank",
+        "_type" : "account",
+        "_id" : "183",
+        "_score" : 0.0,
+        "_source" : {
+          "account_number" : 183,
+          "balance" : 14223,
+          "firstname" : "Hudson",
+          "lastname" : "English",
+          "age" : 26,
+          "gender" : "F",
+          "address" : "823 Herkimer Place",
+          "employer" : "Xinware",
+          "email" : "hudsonenglish@xinware.com",
+          "city" : "Robbins",
+          "state" : "ND"
+        }
+      },
+      {
+        "_index" : "bank",
+        "_type" : "account",
+        "_id" : "222",
+        "_score" : 0.0,
+        "_source" : {
+          "account_number" : 222,
+          "balance" : 14764,
+          "firstname" : "Rachelle",
+          "lastname" : "Rice",
+          "age" : 36,
+          "gender" : "M",
+          "address" : "333 Narrows Avenue",
+          "employer" : "Enaut",
+          "email" : "rachellerice@enaut.com",
+          "city" : "Wright",
+          "state" : "AZ"
+        }
+      },
+      {
+        "_index" : "bank",
+        "_type" : "account",
+        "_id" : "227",
+        "_score" : 0.0,
+        "_source" : {
+          "account_number" : 227,
+          "balance" : 19780,
+          "firstname" : "Coleman",
+          "lastname" : "Berg",
+          "age" : 22,
+          "gender" : "M",
+          "address" : "776 Little Street",
+          "employer" : "Exoteric",
+          "email" : "colemanberg@exoteric.com",
+          "city" : "Eagleville",
+          "state" : "WV"
+        }
+      },
+      {
+        "_index" : "bank",
+        "_type" : "account",
+        "_id" : "272",
+        "_score" : 0.0,
+        "_source" : {
+          "account_number" : 272,
+          "balance" : 19253,
+          "firstname" : "Lilly",
+          "lastname" : "Morgan",
+          "age" : 25,
+          "gender" : "F",
+          "address" : "689 Fleet Street",
+          "employer" : "Biolive",
+          "email" : "lillymorgan@biolive.com",
+          "city" : "Sunbury",
+          "state" : "OH"
+        }
+      }
+    ]
+  }
+}
+
+```
+
+**能看到所有文档的 "_score" : 0.0。**
+
+##### 8、term
+
+和match一样。匹配某个属性的值。全文检索字段用match，其他非text字段匹配用term。
+
+
+
+>
+>
+>Avoid using the `term` query for [`text`](https://www.elastic.co/guide/en/elasticsearch/reference/7.6/text.html) fields.
+>
+>避免对文本字段使用“term”查询
+>
+>By default, Elasticsearch changes the values of `text` fields as part of [analysis](). This can make finding exact matches for `text` field values difficult.
+>
+>默认情况下，Elasticsearch作为[analysis]()的一部分更改' text '字段的值。这使得为“text”字段值寻找精确匹配变得困难。 
+>
+>To search `text` field values, use the match.
+>
+>要搜索“text”字段值，请使用匹配。
+>
+>https://www.elastic.co/guide/en/elasticsearch/reference/7.6/query-dsl-term-query.html 
+
+使用term匹配查询
+
+```json
+GET bank/_search
+{
+  "query": {
+    "term": {
+      "address": "mill Road"
+    }
+  }
+}
+```
+
+查询结果：
+
+```json
+{
+  "took" : 0,
+  "timed_out" : false,
+  "_shards" : {
+    "total" : 1,
+    "successful" : 1,
+    "skipped" : 0,
+    "failed" : 0
+  },
+  "hits" : {
+    "total" : {
+      "value" : 0,
+      "relation" : "eq"
+    },
+    "max_score" : null,
+    "hits" : [ ]
+  }
+}
+
+```
+
+一条也没有匹配到
+
+
+
+而更换为match匹配时，能够匹配到32个文档
+
+![image-20200502120921830](/image-20200502120921830.png)
+
+也就是说，**全文检索字段用match，其他非text字段匹配用term**。
+
 ##### 9、aggregations（执行聚合）
 
-聚合提供了从数据分组和提取数据的能力，最简单的聚合方法大致等于 SQL GROUP BY 和 SQL 聚合函数，在 ES 中，你有执行搜索返回 hits （命中结果） 并且同时返回聚合结果，把一个响应中的所有 hits（命中结果）分隔开的能力，这是非常强大有效的，你可以执行查询和多个聚合，并且在一个使用中得到各自的（任何一个的）返回结果，使用一次简洁简化的 API 来避免网络往返
+聚合提供了从数据分组和提取数据的能力，最简单的聚合方法大致等于 SQL GROUP BY 和 SQL 聚合函数，在 ES 中，你有执行搜索返回 hits （命中结果） 并且同时返回聚合结果，把一个响应中的所有 hits（命中结果）分隔开的能力，这是非常强大有效的，你可以执行查询和多个聚合，并且在一个使用中得到各自的（任何一个的）返回结果，使用一次简洁简化的 API 来避免网络往返。
 
-**搜索address中包含mill的所有人的年龄分布以及平均年龄**
+
+aggs：执行聚合。聚合语法如下：
+
+```json
+"aggs":{
+    "aggs_name这次聚合的名字，方便展示在结果集中":{
+        "AGG_TYPE聚合的类型(avg,term,terms)":{}
+     }
+}，
+```
+
+
+
+**address中包含mill的所有人的年龄分布以及平均年龄**
+
+size:0不显示搜索数据
 
 ```http
 GET bank/_search
@@ -609,19 +2588,69 @@ GET bank/_search
 }
 ```
 
+查询结果：
+
+```json
+{
+  "took" : 2,
+  "timed_out" : false,
+  "_shards" : {
+    "total" : 1,
+    "successful" : 1,
+    "skipped" : 0,
+    "failed" : 0
+  },
+  "hits" : {
+    "total" : {
+      "value" : 4,
+      "relation" : "eq"
+    },
+    "max_score" : null,
+    "hits" : [ ]
+  },
+  "aggregations" : {
+    "ageAgg" : {
+      "doc_count_error_upper_bound" : 0,
+      "sum_other_doc_count" : 0,
+      "buckets" : [
+        {
+          "key" : 38,
+          "doc_count" : 2
+        },
+        {
+          "key" : 28,
+          "doc_count" : 1
+        },
+        {
+          "key" : 32,
+          "doc_count" : 1
+        }
+      ]
+    },
+    "ageAvg" : {
+      "value" : 34.0
+    },
+    "balanceAvg" : {
+      "value" : 25208.0
+    }
+  }
+}
+
+```
+
 **按照年龄聚合，并且请求这些年龄段的这些人的平均薪资**
 
-```java
+```json
 GET bank/_search
 {
-  "query":{
+  "query": {
     "match_all": {}
   },
   "aggs": {
     "ageAgg": {
       "terms": {
         "field": "age",
-        "size": 10
+        "size": 100
       },
       "aggs": {
         "ageAvg": {
@@ -631,14 +2660,192 @@ GET bank/_search
         }
       }
     }
-  }
+  },
+  "size": 0
 }
 ```
 
+输出结果：
+
+```json
+{
+  "took" : 49,
+  "timed_out" : false,
+  "_shards" : {
+    "total" : 1,
+    "successful" : 1,
+    "skipped" : 0,
+    "failed" : 0
+  },
+  "hits" : {
+    "total" : {
+      "value" : 1000,
+      "relation" : "eq"
+    },
+    "max_score" : null,
+    "hits" : [ ]
+  },
+  "aggregations" : {
+    "ageAgg" : {
+      "doc_count_error_upper_bound" : 0,
+      "sum_other_doc_count" : 0,
+      "buckets" : [
+        {
+          "key" : 31,
+          "doc_count" : 61,
+          "ageAvg" : {
+            "value" : 28312.918032786885
+          }
+        },
+        {
+          "key" : 39,
+          "doc_count" : 60,
+          "ageAvg" : {
+            "value" : 25269.583333333332
+          }
+        },
+        {
+          "key" : 26,
+          "doc_count" : 59,
+          "ageAvg" : {
+            "value" : 23194.813559322032
+          }
+        },
+        {
+          "key" : 32,
+          "doc_count" : 52,
+          "ageAvg" : {
+            "value" : 23951.346153846152
+          }
+        },
+        {
+          "key" : 35,
+          "doc_count" : 52,
+          "ageAvg" : {
+            "value" : 22136.69230769231
+          }
+        },
+        {
+          "key" : 36,
+          "doc_count" : 52,
+          "ageAvg" : {
+            "value" : 22174.71153846154
+          }
+        },
+        {
+          "key" : 22,
+          "doc_count" : 51,
+          "ageAvg" : {
+            "value" : 24731.07843137255
+          }
+        },
+        {
+          "key" : 28,
+          "doc_count" : 51,
+          "ageAvg" : {
+            "value" : 28273.882352941175
+          }
+        },
+        {
+          "key" : 33,
+          "doc_count" : 50,
+          "ageAvg" : {
+            "value" : 25093.94
+          }
+        },
+        {
+          "key" : 34,
+          "doc_count" : 49,
+          "ageAvg" : {
+            "value" : 26809.95918367347
+          }
+        },
+        {
+          "key" : 30,
+          "doc_count" : 47,
+          "ageAvg" : {
+            "value" : 22841.106382978724
+          }
+        },
+        {
+          "key" : 21,
+          "doc_count" : 46,
+          "ageAvg" : {
+            "value" : 26981.434782608696
+          }
+        },
+        {
+          "key" : 40,
+          "doc_count" : 45,
+          "ageAvg" : {
+            "value" : 27183.17777777778
+          }
+        },
+        {
+          "key" : 20,
+          "doc_count" : 44,
+          "ageAvg" : {
+            "value" : 27741.227272727272
+          }
+        },
+        {
+          "key" : 23,
+          "doc_count" : 42,
+          "ageAvg" : {
+            "value" : 27314.214285714286
+          }
+        },
+        {
+          "key" : 24,
+          "doc_count" : 42,
+          "ageAvg" : {
+            "value" : 28519.04761904762
+          }
+        },
+        {
+          "key" : 25,
+          "doc_count" : 42,
+          "ageAvg" : {
+            "value" : 27445.214285714286
+          }
+        },
+        {
+          "key" : 37,
+          "doc_count" : 42,
+          "ageAvg" : {
+            "value" : 27022.261904761905
+          }
+        },
+        {
+          "key" : 27,
+          "doc_count" : 39,
+          "ageAvg" : {
+            "value" : 21471.871794871793
+          }
+        },
+        {
+          "key" : 38,
+          "doc_count" : 39,
+          "ageAvg" : {
+            "value" : 26187.17948717949
+          }
+        },
+        {
+          "key" : 29,
+          "doc_count" : 35,
+          "ageAvg" : {
+            "value" : 29483.14285714286
+          }
+        }
+      ]
+    }
+  }
+}
+```
 **查出所有年龄分布，并且这些年龄段中M的平均薪资和 F 的平均薪资以及这个年龄段的总体平均薪资**
 
-```java
-GET /bank/_search
+```json
+GET bank/_search
 {
   "query": {
     "match_all": {}
@@ -652,21 +2859,86 @@ GET /bank/_search
       "aggs": {
         "genderAgg": {
           "terms": {
-            "field": "gender.keyword",
-            "size": 10
+            "field": "gender.keyword"
           },
           "aggs": {
             "balanceAvg": {
               "avg": {
                 "field": "balance"
-                }
+              }
             }
+          }
+        },
+        "ageBalanceAvg": {
+          "avg": {
+            "field": "balance"
           }
         }
       }
     }
+  },
+  "size": 0
+}
+```
+
+输出结果：
+
+```json
+{
+  "took" : 119,
+  "timed_out" : false,
+  "_shards" : {
+    "total" : 1,
+    "successful" : 1,
+    "skipped" : 0,
+    "failed" : 0
+  },
+  "hits" : {
+    "total" : {
+      "value" : 1000,
+      "relation" : "eq"
+    },
+    "max_score" : null,
+    "hits" : [ ]
+  },
+  "aggregations" : {
+    "ageAgg" : {
+      "doc_count_error_upper_bound" : 0,
+      "sum_other_doc_count" : 0,
+      "buckets" : [
+        {
+          "key" : 31,
+          "doc_count" : 61,
+          "genderAgg" : {
+            "doc_count_error_upper_bound" : 0,
+            "sum_other_doc_count" : 0,
+            "buckets" : [
+              {
+                "key" : "M",
+                "doc_count" : 35,
+                "balanceAvg" : {
+                  "value" : 29565.628571428573
+                }
+              },
+              {
+                "key" : "F",
+                "doc_count" : 26,
+                "balanceAvg" : {
+                  "value" : 26626.576923076922
+                }
+              }
+            ]
+          },
+          "ageBalanceAvg" : {
+            "value" : 28312.918032786885
+          }
+        }
+      ]
+        .......//省略其他
+    }
   }
 }
+
 ```
 
 ##### 10、nested
@@ -675,7 +2947,7 @@ GET /bank/_search
 
 数据类型概览
 
-![image-20201225063939652](/image-20201225063939652.png)
+![image-20201225063939652](image-20201225063939652.png)
 
 参考博客：https://elastic.blog.csdn.net/article/details/82950393
 
@@ -683,9 +2955,9 @@ GET /bank/_search
 
 ##### 1、字段类型
 
-![image-20201026074813810](/image-20201026074813810.png)
+![image-20201026074813810](image-20201026074813810.png)
 
-![image-20201026074841875](/image-20201026074841875.png)
+![image-20201026074841875](image-20201026074841875.png)
 
 ##### 2、映射
 
@@ -703,13 +2975,105 @@ Mapping 是用来定义一个文档（document）,以及他所包含的属性（
 
 GET bank/_mapping
 
+  ```json
+  {
+    "bank" : {
+      "mappings" : {
+        "properties" : {
+          "account_number" : {
+            "type" : "long"
+          },
+          "address" : {
+            "type" : "text",
+            "fields" : {
+              "keyword" : {
+                "type" : "keyword",
+                "ignore_above" : 256
+              }
+            }
+          },
+          "age" : {
+            "type" : "long"
+          },
+          "balance" : {
+            "type" : "long"
+          },
+          "city" : {
+            "type" : "text",
+            "fields" : {
+              "keyword" : {
+                "type" : "keyword",
+                "ignore_above" : 256
+              }
+            }
+          },
+          "email" : {
+            "type" : "text",
+            "fields" : {
+              "keyword" : {
+                "type" : "keyword",
+                "ignore_above" : 256
+              }
+            }
+          },
+          "employer" : {
+            "type" : "text",
+            "fields" : {
+              "keyword" : {
+                "type" : "keyword",
+                "ignore_above" : 256
+              }
+            }
+          },
+          "firstname" : {
+            "type" : "text",
+            "fields" : {
+              "keyword" : {
+                "type" : "keyword",
+                "ignore_above" : 256
+              }
+            }
+          },
+          "gender" : {
+            "type" : "text",
+            "fields" : {
+              "keyword" : {
+                "type" : "keyword",
+                "ignore_above" : 256
+              }
+            }
+          },
+          "lastname" : {
+            "type" : "text",
+            "fields" : {
+              "keyword" : {
+                "type" : "keyword",
+                "ignore_above" : 256
+              }
+            }
+          },
+          "state" : {
+            "type" : "text",
+            "fields" : {
+              "keyword" : {
+                "type" : "keyword",
+                "ignore_above" : 256
+              }
+            }
+          }
+        }
+      }
+    }
+  }
+  ```
+
 修改 mapping 信息
 
 https://www.elastic.co/guide/en/elasticsearch/reference/7.10/mapping-types.html
 
 自动猜测的映射类型
 
-![image-20201026075424198](/image-20201026075424198.png)
+![image-20201026075424198](image-20201026075424198.png)
 
 ##### 3、新版本改变
 
@@ -732,7 +3096,22 @@ ES 8.X
 
 2、将已存在的索引下的类型数据，全部迁移到指定位置即可，详见数据迁移
 
+
+
+> **Elasticsearch 7.x**
+>
+> - Specifying types in requests is deprecated. For instance, indexing a document no longer requires a document `type`. The new index APIs are `PUT {index}/_doc/{id}` in case of explicit ids and `POST {index}/_doc` for auto-generated ids. Note that in 7.0, `_doc` is a permanent part of the path, and represents the endpoint name rather than the document type.
+> - The `include_type_name` parameter in the index creation, index template, and mapping APIs will default to `false`. Setting the parameter at all will result in a deprecation warning.
+> - The `_default_` mapping type is removed.
+>
+> **Elasticsearch 8.x**
+>
+> - Specifying types in requests is no longer supported.
+> - The `include_type_name` parameter is removed.
+
 **1、创建映射**
+
+创建索引并指定映射
 
 ```http
 PUT /my_index
@@ -741,6 +3120,64 @@ PUT /my_index
     "properties": {
       "age":{"type":"integer"},
       "email":{"type":"keyword"}
+    }
+  }
+}
+```
+
+ 输出：
+
+```json
+{
+  "acknowledged" : true,
+  "shards_acknowledged" : true,
+  "index" : "my_index"
+}
+
+```
+
+
+
+###### 查看映射
+
+```json
+GET /my_index
+```
+
+输出结果：
+
+```json
+{
+  "my_index" : {
+    "aliases" : { },
+    "mappings" : {
+      "properties" : {
+        "age" : {
+          "type" : "integer"
+        },
+        "email" : {
+          "type" : "keyword"
+        },
+        "employee-id" : {
+          "type" : "keyword",
+          "index" : false
+        },
+        "name" : {
+          "type" : "text"
+        }
+      }
+    },
+    "settings" : {
+      "index" : {
+        "creation_date" : "1588410780774",
+        "number_of_shards" : "1",
+        "number_of_replicas" : "1",
+        "uuid" : "ua0lXhtkQCOmn7Kh3iUu0w",
+        "version" : {
+          "created" : "7060299"
+        },
+        "provided_name" : "my_index"
+      }
     }
   }
 }
@@ -760,13 +3197,15 @@ PUT /my_index/_mapping
 }
 ```
 
+这里的 "index": false，表明新增的字段不能被检索，只是一个冗余字段。
+
 ##### 3、更新映射
 
-对于已经存在的映射字段，我们不能更新，更新必须创建新的索引进行数据迁移
+对于已经存在的映射字段，我们不能更新。更新必须创建新的索引，进行数据迁移
 
 **4、数据迁移**
 
-先创 new_twitter 的正确映射，然乎使用如下方式进行数据迁移
+先创 new_twitter 的正确映射，然后使用如下方式进行数据迁移
 
 ```http
 POST _reindex [固定写法]
@@ -786,7 +3225,7 @@ POST _reindex
     "type":"tweet"
   },
   "dest":{
-    "index":"twweets"
+    "index":"new_twitter"
   }
 }
 ```
@@ -794,6 +3233,170 @@ POST _reindex
 参考官网：https://www.elastic.co/guide/en/elasticsearch/reference/7.10/mapping-types.html
 
 参数映射规则：https://www.elastic.co/guide/en/elasticsearch/reference/7.10/mapping-params.html#mapping-params
+
+GET /bank/_search
+
+```json
+{
+  "took" : 0,
+  "timed_out" : false,
+  "_shards" : {
+    "total" : 1,
+    "successful" : 1,
+    "skipped" : 0,
+    "failed" : 0
+  },
+  "hits" : {
+    "total" : {
+      "value" : 1000,
+      "relation" : "eq"
+    },
+    "max_score" : 1.0,
+    "hits" : [
+      {
+        "_index" : "bank",
+        "_type" : "account",//类型为account
+        "_id" : "1",
+        "_score" : 1.0,
+        "_source" : {
+          "account_number" : 1,
+          "balance" : 39225,
+          "firstname" : "Amber",
+          "lastname" : "Duke",
+          "age" : 32,
+          "gender" : "M",
+          "address" : "880 Holmes Lane",
+          "employer" : "Pyrami",
+          "email" : "amberduke@pyrami.com",
+          "city" : "Brogan",
+          "state" : "IL"
+        }
+      },
+      ...
+```
+
+
+
+```
+GET /bank/_search
+```
+
+![image-20200502174825233](/image-20200502174825233.png)
+
+想要将年龄修改为integer
+
+```json
+PUT /newbank
+{
+  "mappings": {
+    "properties": {
+      "account_number": {
+        "type": "long"
+      },
+      "address": {
+        "type": "text"
+      },
+      "age": {
+        "type": "integer"
+      },
+      "balance": {
+        "type": "long"
+      },
+      "city": {
+        "type": "keyword"
+      },
+      "email": {
+        "type": "keyword"
+      },
+      "employer": {
+        "type": "keyword"
+      },
+      "firstname": {
+        "type": "text"
+      },
+      "gender": {
+        "type": "keyword"
+      },
+      "lastname": {
+        "type": "text",
+        "fields": {
+          "keyword": {
+            "type": "keyword",
+            "ignore_above": 256
+          }
+        }
+      },
+      "state": {
+        "type": "keyword"
+      }
+    }
+  }
+}
+```
+
+查看“newbank”的映射：
+
+GET /newbank/_mapping
+
+![image-20200502175901959](/image-20200502175901959.png)
+
+能够看到age的映射类型被修改为了integer.
+
+
+
+将bank中的数据迁移到newbank中
+
+```json
+POST _reindex
+{
+  "source": {
+    "index": "bank",
+    "type": "account"
+  },
+  "dest": {
+    "index": "newbank"
+  }
+}
+```
+
+运行输出：
+
+```json
+#! Deprecation: [types removal] Specifying types in reindex requests is deprecated.
+{
+  "took" : 768,
+  "timed_out" : false,
+  "total" : 1000,
+  "updated" : 0,
+  "created" : 1000,
+  "deleted" : 0,
+  "batches" : 1,
+  "version_conflicts" : 0,
+  "noops" : 0,
+  "retries" : {
+    "bulk" : 0,
+    "search" : 0
+  },
+  "throttled_millis" : 0,
+  "requests_per_second" : -1.0,
+  "throttled_until_millis" : 0,
+  "failures" : [ ]
+}
+```
+
+
+
+查看newbank中的数据
+
+![image-20200502181432745](/image-20200502181432745.png)
+
+删除重装es，扩充最大内存。
+
+> free -m可查看虚拟机空闲内存。不足可关闭虚拟机后，在virtualbox中扩充虚拟机内存。
+
+可以看到根据container id 停止 删除 容器时，不必把id输入完整。
+
+![image-20210602204830403](/image-20210602204830403.png)
 
 #### 1.4.4 分词
 
@@ -807,19 +3410,370 @@ POST _reindex
 
 **Elasticsearch** 提供了很多内置的分词器，可以用来构建custom analyzers(自定义分词器)
 
+关于分词器： https://www.elastic.co/guide/en/elasticsearch/reference/7.6/analysis.html 
+
+使用指定分词器输出token流
+
+```json
+POST _analyze
+{
+  "analyzer": "standard",
+  "text": "The 2 QUICK Brown-Foxes jumped over the lazy dog's bone."
+}
+```
+
+执行结果：
+
+```json
+{
+  "tokens" : [
+    {
+      "token" : "the",
+      "start_offset" : 0,
+      "end_offset" : 3,
+      "type" : "<ALPHANUM>",
+      "position" : 0
+    },
+    {
+      "token" : "2",
+      "start_offset" : 4,
+      "end_offset" : 5,
+      "type" : "<NUM>",
+      "position" : 1
+    },
+    {
+      "token" : "quick",
+      "start_offset" : 6,
+      "end_offset" : 11,
+      "type" : "<ALPHANUM>",
+      "position" : 2
+    },
+    {
+      "token" : "brown",
+      "start_offset" : 12,
+      "end_offset" : 17,
+      "type" : "<ALPHANUM>",
+      "position" : 3
+    },
+    {
+      "token" : "foxes",
+      "start_offset" : 18,
+      "end_offset" : 23,
+      "type" : "<ALPHANUM>",
+      "position" : 4
+    },
+    {
+      "token" : "jumped",
+      "start_offset" : 24,
+      "end_offset" : 30,
+      "type" : "<ALPHANUM>",
+      "position" : 5
+    },
+    {
+      "token" : "over",
+      "start_offset" : 31,
+      "end_offset" : 35,
+      "type" : "<ALPHANUM>",
+      "position" : 6
+    },
+    {
+      "token" : "the",
+      "start_offset" : 36,
+      "end_offset" : 39,
+      "type" : "<ALPHANUM>",
+      "position" : 7
+    },
+    {
+      "token" : "lazy",
+      "start_offset" : 40,
+      "end_offset" : 44,
+      "type" : "<ALPHANUM>",
+      "position" : 8
+    },
+    {
+      "token" : "dog's",
+      "start_offset" : 45,
+      "end_offset" : 50,
+      "type" : "<ALPHANUM>",
+      "position" : 9
+    },
+    {
+      "token" : "bone",
+      "start_offset" : 51,
+      "end_offset" : 55,
+      "type" : "<ALPHANUM>",
+      "position" : 10
+    }
+  ]
+}
+
+```
+
+
+
 ##### 1、安装 ik 分词器
 
-注意:不能用默认的 elasticsearch-plugin.install xxx.zip 进行自动安装
+
+
+![image-20200502182929583](/image-20200502182929583.png)
+
+所有的语言分词，默认使用的都是“Standard Analyzer”，但是这些分词器针对于中文的分词，并不友好。为此需要安装中文的分词器。
+
+
+
+注意：不能用默认elasticsearch-plugin install xxx.zip 进行自动安装
 
 https://github.com/medcl/elasticsearch-analysis-ik/releases 下载与 es对应的版本
 
 安装后拷贝到 plugins 目录下
 
-##### 2、测试
+在前面安装的elasticsearch时，我们已经将elasticsearch容器的“/usr/share/elasticsearch/plugins”目录，映射到宿主机的“ /mydata/elasticsearch/plugins”目录下，所以比较方便的做法就是下载“/elasticsearch-analysis-ik-7.6.2.zip”文件，然后解压到该文件夹下即可。安装完毕后，需要重启elasticsearch容器。
+
+ 
+
+如果不嫌麻烦，还可以采用如下的方式。
+
+###### （1）查看elasticsearch版本号：
+
+```shell
+[root@hadoop-104 ~]# curl http://localhost:9200
+{
+  "name" : "0adeb7852e00",
+  "cluster_name" : "elasticsearch",
+  "cluster_uuid" : "9gglpP0HTfyOTRAaSe2rIg",
+  "version" : {
+    "number" : "7.6.2",      #版本号为7.6.2
+    "build_flavor" : "default",
+    "build_type" : "docker",
+    "build_hash" : "ef48eb35cf30adf4db14086e8aabd07ef6fb113f",
+    "build_date" : "2020-03-26T06:34:37.794943Z",
+    "build_snapshot" : false,
+    "lucene_version" : "8.4.0",
+    "minimum_wire_compatibility_version" : "6.8.0",
+    "minimum_index_compatibility_version" : "6.0.0-beta1"
+  },
+  "tagline" : "You Know, for Search"
+}
+[root@hadoop-104 ~]# 
+```
+
+
+
+###### （2）进入es容器内部plugin目录
+
+* docker exec -it 容器id /bin/bash
+
+```shell
+[root@hadoop-104 ~]# docker exec -it elasticsearch /bin/bash
+[root@0adeb7852e00 elasticsearch]# 
+```
+
+* wget  https://github.com/medcl/elasticsearch-analysis-ik/releases/download/v7.6.2/elasticsearch-analysis-ik-7.6.2.zip
+
+```shell
+[root@0adeb7852e00 elasticsearch]# pwd
+/usr/share/elasticsearch
+#下载ik7.6.2
+[root@0adeb7852e00 elasticsearch]# wget https://github.com/medcl/elasticsearch-analysis-ik/releases/download/v7.6.2/elasticsearch-analysis-ik-7.6.2.zip
+```
+
+* unzip 下载的文件
+
+```shell
+[root@0adeb7852e00 elasticsearch]# unzip elasticsearch-analysis-ik-7.6.2.zip -d ik
+Archive:  elasticsearch-analysis-ik-7.6.2.zip
+   creating: ik/config/
+  inflating: ik/config/main.dic      
+  inflating: ik/config/quantifier.dic  
+  inflating: ik/config/extra_single_word_full.dic  
+  inflating: ik/config/IKAnalyzer.cfg.xml  
+  inflating: ik/config/surname.dic   
+  inflating: ik/config/suffix.dic    
+  inflating: ik/config/stopword.dic  
+  inflating: ik/config/extra_main.dic  
+  inflating: ik/config/extra_stopword.dic  
+  inflating: ik/config/preposition.dic  
+  inflating: ik/config/extra_single_word_low_freq.dic  
+  inflating: ik/config/extra_single_word.dic  
+  inflating: ik/elasticsearch-analysis-ik-7.6.2.jar  
+  inflating: ik/httpclient-4.5.2.jar  
+  inflating: ik/httpcore-4.4.4.jar   
+  inflating: ik/commons-logging-1.2.jar  
+  inflating: ik/commons-codec-1.9.jar  
+  inflating: ik/plugin-descriptor.properties  
+  inflating: ik/plugin-security.policy  
+[root@0adeb7852e00 elasticsearch]#
+#移动到plugins目录下
+[root@0adeb7852e00 elasticsearch]# mv ik plugins/
+```
+
+* rm -rf *.zip
+
+```
+[root@0adeb7852e00 elasticsearch]# rm -rf elasticsearch-analysis-ik-7.6.2.zip 
+```
+
+
+确认是否安装好了分词器
+
+##### 2、测试分词器
+
+使用默认
+
+```json
+GET my_index/_analyze
+{
+   "text":"我是中国人"
+}
+```
+
+请观察执行结果：
+
+```json
+{
+  "tokens" : [
+    {
+      "token" : "我",
+      "start_offset" : 0,
+      "end_offset" : 1,
+      "type" : "<IDEOGRAPHIC>",
+      "position" : 0
+    },
+    {
+      "token" : "是",
+      "start_offset" : 1,
+      "end_offset" : 2,
+      "type" : "<IDEOGRAPHIC>",
+      "position" : 1
+    },
+    {
+      "token" : "中",
+      "start_offset" : 2,
+      "end_offset" : 3,
+      "type" : "<IDEOGRAPHIC>",
+      "position" : 2
+    },
+    {
+      "token" : "国",
+      "start_offset" : 3,
+      "end_offset" : 4,
+      "type" : "<IDEOGRAPHIC>",
+      "position" : 3
+    },
+    {
+      "token" : "人",
+      "start_offset" : 4,
+      "end_offset" : 5,
+      "type" : "<IDEOGRAPHIC>",
+      "position" : 4
+    }
+  ]
+}
+```
+
+
+
+```json
+GET my_index/_analyze
+{
+   "analyzer": "ik_smart", 
+   "text":"我是中国人"
+}
+```
+
+输出结果：
+
+```json
+{
+  "tokens" : [
+    {
+      "token" : "我",
+      "start_offset" : 0,
+      "end_offset" : 1,
+      "type" : "CN_CHAR",
+      "position" : 0
+    },
+    {
+      "token" : "是",
+      "start_offset" : 1,
+      "end_offset" : 2,
+      "type" : "CN_CHAR",
+      "position" : 1
+    },
+    {
+      "token" : "中国人",
+      "start_offset" : 2,
+      "end_offset" : 5,
+      "type" : "CN_WORD",
+      "position" : 2
+    }
+  ]
+}
+
+```
+
+
+
+```json
+GET my_index/_analyze
+{
+   "analyzer": "ik_max_word", 
+   "text":"我是中国人"
+}
+```
+
+
+
+输出结果：
+
+```json
+{
+  "tokens" : [
+    {
+      "token" : "我",
+      "start_offset" : 0,
+      "end_offset" : 1,
+      "type" : "CN_CHAR",
+      "position" : 0
+    },
+    {
+      "token" : "是",
+      "start_offset" : 1,
+      "end_offset" : 2,
+      "type" : "CN_CHAR",
+      "position" : 1
+    },
+    {
+      "token" : "中国人",
+      "start_offset" : 2,
+      "end_offset" : 5,
+      "type" : "CN_WORD",
+      "position" : 2
+    },
+    {
+      "token" : "中国",
+      "start_offset" : 2,
+      "end_offset" : 4,
+      "type" : "CN_WORD",
+      "position" : 3
+    },
+    {
+      "token" : "国人",
+      "start_offset" : 3,
+      "end_offset" : 5,
+      "type" : "CN_WORD",
+      "position" : 4
+    }
+  ]
+}
+
+```
+
+ 
 
 分词器
 
-![image-20201026092255250](/image-20201026092255250.png)
+![image-20201026092255250](image-20201026092255250.png)
 
 **3、自定义词库**
 
@@ -843,6 +3797,59 @@ https://github.com/medcl/elasticsearch-analysis-ik/releases 下载与 es对应�
 </properties>
 
 ```
+
+原来的xml
+
+```xml
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE properties SYSTEM "http://java.sun.com/dtd/properties.dtd">
+<properties>
+	<comment>IK Analyzer 扩展配置</comment>
+	<!--用户可以在这里配置自己的扩展字典 -->
+	<entry key="ext_dict"></entry>
+	 <!--用户可以在这里配置自己的扩展停止词字典-->
+	<entry key="ext_stopwords"></entry>
+	<!--用户可以在这里配置远程扩展字典 -->
+	<!-- <entry key="remote_ext_dict">words_location</entry> -->
+	<!--用户可以在这里配置远程扩展停止词字典-->
+	<!-- <entry key="remote_ext_stopwords">words_location</entry> -->
+</properties>
+
+```
+
+修改完成后，需要重启elasticsearch容器，否则修改不生效。
+
+更新完成后，es只会对于新增的数据用更新分词。历史数据是不会重新分词的。如果想要历史数据重新分词，需要执行：
+
+```shell
+POST my_index/_update_by_query?conflicts=proceed
+```
+
+
+
+
+
+http://192.168.56.10/es/fenci.txt，这个是我们虚拟机nginx上资源的访问路径
+
+在运行下面实例之前，需要安装nginx（安装方法见安装nginx），然后创建“fenci.txt”文件，内容如下：
+
+使用vim或者echo配合>。输入尚硅谷，乔碧罗。
+
+![image-20210602210558523](/image-20210602210558523.png)
+
+
+
+```shell
+echo "..." > /mydata/nginx/html/fenci.txt 
+```
+
+测试效果：
+
+添加扩展分词前，无法识别乔碧罗。现在可以了。
+
+![image-20210602210842931](/image-20210602210842931.png)
+
+
 
 
 
@@ -1059,7 +4066,7 @@ logstach：存储数据
 
 Kiban:视图化查看数据
 
-![image-20201027120603889](/image-20201027120603889.png)
+![image-20201027120603889](image-20201027120603889.png)
 
 
 
@@ -1408,17 +4415,17 @@ public boolean productStatusUp(List<SkuEsModel> skuEsModelList) throws IOExcepti
 
 - 根据 `spuid` 查询 `pms_sku_info` 表得到商品相关属性
 
-- ![image-20201028153205471](/image-20201028153205471.png)
+- ![image-20201028153205471](image-20201028153205471.png)
 
 - 根据 `spuid` 查询 `pms_product_attr_value` 表得到可以用来检索的规格属性
 
-- ![image-20201028153038796](/image-20201028153038796.png)
+- ![image-20201028153038796](image-20201028153038796.png)
 
   
 
 - 从 `ProductAttrValueEntity` 中拿到所有的 attrId，根据 attrId 查询 `pms_attr` 查询检索的属性
 
-- ![image-20201028155204710](/image-20201028155204710.png)
+- ![image-20201028155204710](image-20201028155204710.png)
 
 - x根据 `pms_attr`  查询到检索属性后，用检索属性和 原先根据 `spuid` 查询 `pms_sku_info` 表得到商品相关属性进行比较，`pms_sku_info` 包含 从 `pms_attr` 字段attr_id 则数据保存否则过滤
 
@@ -1473,7 +4480,7 @@ Spring:
 
 resource 目录介绍：
 
-![image-20201029102830164](/image-20201029102830164.png)
+![image-20201029102830164](image-20201029102830164.png)
 
 
 
@@ -1499,7 +4506,7 @@ index.html中使用
 
 默认SpringBoot会直接去找 templates 下的 index.html 
 
-![image-20201029103230550](/image-20201029103230550.png)
+![image-20201029103230550](image-20201029103230550.png)
 
 ### 3.2 整合dev-tools 渲染分类数据
 
@@ -1507,7 +4514,7 @@ index.html中使用
 
 我们需要在页面的侧边查询出分类的数据，并且选中一级分类数据后显示二级和三级分类数据
 
-![image-20201029103544553](/image-20201029103544553.png)
+![image-20201029103544553](image-20201029103544553.png)
 
 - 先获取一级分类数据
 - 用户选中后在查询二级分类数据
@@ -1611,22 +4618,22 @@ public Map<String, List<Catelog2Vo>> getCatelogJson() {
 
 什么是 反向代理?
 
-![image-20201029051037570](/image-20201029051037570.png)
+![image-20201029051037570](image-20201029051037570.png)
 
 vi nginx.conf 文件后在底部有该条语句：
 
 - 引入nginx下的 conf.d 下面的conf文件
 - 那么我们开始在该目录下增加关于 谷粒商城的 nginx
 
-![image-20201029045921936](/image-20201029045921936.png)
+![image-20201029045921936](image-20201029045921936.png)
 
 拷贝原先默认的 conf
 
-![image-20201029050207857](/image-20201029050207857.png)
+![image-20201029050207857](image-20201029050207857.png)
 
 修改
 
-![image-20201029050136324](/image-20201029050136324.png)
+![image-20201029050136324](image-20201029050136324.png)
 
 
 
@@ -1634,7 +4641,7 @@ vi nginx.conf 文件后在底部有该条语句：
 
  配置 UpStream
 
-![image-20201029050256216](/image-20201029050256216.png)
+![image-20201029050256216](image-20201029050256216.png)
 
 
 
@@ -1660,7 +4667,7 @@ http {
 
 同时在 本机上 hosts 文件上那个配置 域名映射
 
-![image-20201029050625740](/image-20201029050625740.png)
+![image-20201029050625740](image-20201029050625740.png)
 
 将请求转接给网关后，需要在网关配置
 
@@ -1673,11 +4680,11 @@ http {
 
 最后放几张图方便理解哈
 
-![image-20201029050828421](/image-20201029050828421.png)
+![image-20201029050828421](image-20201029050828421.png)
 
 
 
-![image-20201029050901546](/image-20201029050901546.png)
+![image-20201029050901546](image-20201029050901546.png)
 
 
 
@@ -1707,11 +4714,11 @@ http {
 
 1、Jvm内存模型
 
-![image-20201029112517466](/image-20201029112517466.png)
+![image-20201029112517466](image-20201029112517466.png)
 
 
 
-![image-20201029113956043](/image-20201029113956043.png)
+![image-20201029113956043](image-20201029113956043.png)
 
 
 
@@ -1733,7 +4740,7 @@ http {
 
 垃圾回收
 
-![image-20201029114153244](/image-20201029114153244.png)
+![image-20201029114153244](image-20201029114153244.png)
 
 从 Java8 开始,HotSpot 已经完全将永久代（Permanent Generation）移除，取而代之的是一个新的区域 - 元空间（MetaSpac)
 
@@ -1741,7 +4748,7 @@ http {
 
 
 
-![image-20201029114218716](/image-20201029114218716.png)
+![image-20201029114218716](image-20201029114218716.png)
 
 #### 5.1.3 jconsole 与 jvisualvm
 
@@ -1751,7 +4758,7 @@ jdk 的两个小工具 jconsole、jvisualvm（升级版本的 jconsole）。通�
 
 监控内存泄漏、跟踪垃圾回收、执行时内存、cpu分析、线程分析.....
 
-![image-20201029120502383](/image-20201029120502383.png)
+![image-20201029120502383](image-20201029120502383.png)
 
 运行：正在运行的线程
 
@@ -1769,7 +4776,7 @@ cmd 启动 jvisualvm
 
 工具->插件
 
-![image-20201029121108492](/image-20201029121108492.png)
+![image-20201029121108492](image-20201029121108492.png)
 
 
 
@@ -1852,35 +4859,35 @@ jmeter官网：https://jmeter.apache.org/
 
 ##### 1、添加线程组
 
-![image-20201029084634498](/image-20201029084634498.png)
+![image-20201029084634498](image-20201029084634498.png)
 
 ##### 2、添加 HTTP 请求
 
-![image-20201029085843220](/image-20201029085843220.png)
+![image-20201029085843220](image-20201029085843220.png)
 
 ##### 3、添加监听器
 
-![image-20201029085942442](/image-20201029085942442.png)
+![image-20201029085942442](image-20201029085942442.png)
 
 ##### 4、启动压测&查看
 
 汇总图
 
-![image-20201029092357910](/image-20201029092357910.png)
+![image-20201029092357910](image-20201029092357910.png)
 
 察看结果树
 
-![image-20201029092436633](/image-20201029092436633.png)
+![image-20201029092436633](image-20201029092436633.png)
 
 汇总报告
 
-![image-20201029092454376](/image-20201029092454376.png)
+![image-20201029092454376](image-20201029092454376.png)
 
 
 
 聚合报告
 
-![image-20201029092542876](/image-20201029092542876.png)
+![image-20201029092542876](image-20201029092542876.png)
 
 
 
@@ -1918,7 +4925,7 @@ TCPTimedWaitDelay:30
 
 举例：电商类应用、商品分类，商品列表等适合缓存并加一个失效时间（根据数据更新频率来定）后台如果发布一个商品、买家需要 5 分钟才能看到新商品一般还是可以接受的
 
-![image-20201030190425556](/image-20201030190425556.png)
+![image-20201030190425556](image-20201030190425556.png)
 
 伪代码
 
@@ -1941,7 +4948,7 @@ return data;
 
 SpringBoot 整合 redis，查看SpringBoot提供的 starts
 
-![image-20201031154148722](/image-20201031154148722.png)
+![image-20201031154148722](image-20201031154148722.png)
 
 官网：https://docs.spring.io/spring-boot/docs/2.1.18.RELEASE/reference/html/using-boot-build-systems.html#using-boot-starter
 
@@ -1981,7 +4988,7 @@ Spring:
 
 RedisAutoConfig.java
 
-![image-20201031154710108](/image-20201031154710108.png)
+![image-20201031154710108](image-20201031154710108.png)
 
 ##### 3、测试
 
@@ -2041,21 +5048,21 @@ public Map<String, List<Catelog2Vo>> getCatelogJson() {
 
 #### 高并发下缓存失效问题 
 
-##### 缓存失效
+##### 缓存穿透
 
-![](/image-20201031163704355.png)
+![](image-20201031163704355.png)
 
 ##### 缓存雪崩
 
-![image-20201031163949881](/image-20201031163949881.png)
+![image-20201031163949881](image-20201031163949881.png)
 
 ##### 缓存击穿
 
-![image-20201031164021131](/image-20201031164021131.png)
+![image-20201031164021131](image-20201031164021131.png)
 
 ##### 分布式下如何加锁
 
-![image-20201031112235353](/image-20201031112235353.png)
+![image-20201031112235353](image-20201031112235353.png)
 
 
 
@@ -2065,7 +5072,7 @@ public Map<String, List<Catelog2Vo>> getCatelogJson() {
 
 ##### 分布式锁基本原理
 
-![image-20201031122557660](/image-20201031122557660.png)
+![image-20201031122557660](image-20201031122557660.png)
 
 **理解：**就先当1000个人去占一个厕所，厕所只能有一个人占到这个坑，占到这个坑其他人就只能在外面等待，等待一段时间后可以再次来占坑，业务执行后，释放锁，那么其他人就可以来占这个坑
 
@@ -2073,7 +5080,7 @@ public Map<String, List<Catelog2Vo>> getCatelogJson() {
 
 ##### 分布式锁演进 - 阶段一
 
-![image-20201031123441336](/image-20201031123441336.png)
+![image-20201031123441336](image-20201031123441336.png)
 
 **代码：**
 
@@ -2093,7 +5100,7 @@ public Map<String, List<Catelog2Vo>> getCatelogJson() {
 
 ##### 分布式锁演进 - 阶段二
 
-![image-20201031123640746](/image-20201031123640746.png)
+![image-20201031123640746](image-20201031123640746.png)
 
 **代码：**
 
@@ -2116,7 +5123,7 @@ public Map<String, List<Catelog2Vo>> getCatelogJson() {
 
 ##### 分布式锁演进 - 阶段三
 
-![image-20201031124210112](/image-20201031124210112.png)
+![image-20201031124210112](image-20201031124210112.png)
 
 **代码：**
 
@@ -2139,11 +5146,11 @@ if (lock) {
 
 ##### 分布式锁演进 - 阶段四
 
-![image-20201031124615670](/image-20201031124615670.png)
+![image-20201031124615670](image-20201031124615670.png)
 
 图解：
 
-![image-20201031130547173](/image-20201031130547173.png)
+![image-20201031130547173](image-20201031130547173.png)
 
 代码：
 
@@ -2177,7 +5184,7 @@ if (lock) {
 
 ##### 分布式锁演进 - 阶段五 最终模式
 
-![image-20201031130201609](/image-20201031130201609.png)
+![image-20201031130201609](image-20201031130201609.png)
 
 代码：
 
@@ -2228,13 +5235,13 @@ if (lock) {
 
 官网文档上详细说明了 不推荐使用 setnx来实现分布式锁，应该参考 the Redlock algorithm 的实现
 
-![image-20201101050725534](/image-20201101050725534.png)
+![image-20201101050725534](image-20201101050725534.png)
 
  the Redlock algorithm：https://redis.io/topics/distlock
 
 在Java 语言环境下使用 Redisson
 
-![image-20201101050924914](/image-20201101050924914.png)
+![image-20201101050924914](image-20201101050924914.png)
 
 github：https://github.com/redisson/redisson
 
@@ -2242,7 +5249,7 @@ github：https://github.com/redisson/redisson
 
 在 Maven 仓库中搜索也能搜索出 Redisson
 
-![image-20201101051157803](/image-20201101051157803.png)
+![image-20201101051157803](image-20201101051157803.png)
 
 Pom
 
@@ -2298,27 +5305,27 @@ public String hello(){
 
 1、进入 `Lock` 的实现 发现 他调用的也是 `lock` 方法参数  时间为 -1
 
-![image-20201101051659465](/image-20201101051659465.png)
+![image-20201101051659465](image-20201101051659465.png)
 
 2、再次进入 `lock` 方法
 
 发现他调用了 tryAcquire
 
-![image-20201101051925487](/image-20201101051925487.png)
+![image-20201101051925487](image-20201101051925487.png)
 
 3、进入 tryAcquire
 
-![image-20201101052008724](/image-20201101052008724.png)
+![image-20201101052008724](image-20201101052008724.png)
 
 4、里头调用了 tryAcquireAsync
 
 这里判断 laseTime != -1 就与刚刚的第一步传入的值有关系
 
-![image-20201101052037959](/image-20201101052037959.png)
+![image-20201101052037959](image-20201101052037959.png)
 
 5、进入到 `tryLockInnerAsync` 方法
 
-![image-20201101052158592](/image-20201101052158592.png)
+![image-20201101052158592](image-20201101052158592.png)
 
 
 
@@ -2326,13 +5333,13 @@ public String hello(){
 
 这个变量在构造的时候就赋初始值
 
-![image-20201101052346059](/image-20201101052346059.png)
+![image-20201101052346059](image-20201101052346059.png)
 
 7、最后查看 `lockWatchdogTimeout` 变量
 
 也就是30秒的时间
 
-![image-20201101052428198](/image-20201101052428198.png)
+![image-20201101052428198](image-20201101052428198.png)
 
 
 
@@ -2398,13 +5405,13 @@ public String hello(){
 
 来看下官网的解释
 
-![image-20201101053042268](/image-20201101053042268.png)
+![image-20201101053042268](image-20201101053042268.png)
 
 ##### 4、Redisson - 闭锁测试
 
 官网！！！
 
-![image-20201101053053554](/image-20201101053053554.png)
+![image-20201101053053554](image-20201101053053554.png)
 
 上代码
 
@@ -2446,7 +5453,7 @@ countDown() 把计数器减掉后 await就会放行
 
 官网！！！
 
-![image-20201101053450708](/image-20201101053450708.png)
+![image-20201101053450708](image-20201101053450708.png)
 
 
 
@@ -2486,13 +5493,13 @@ public String go() {
 
 #### 缓存数据一致性 - 双写模式
 
-![image-20201101053613373](/image-20201101053613373.png)
+![image-20201101053613373](image-20201101053613373.png)
 
 两个线程写 最终只有一个线程写成功，后写成功的会把之前写的数据给覆盖，这就会造成脏数据
 
 #### 缓存数据一致性 - 失效模式
 
-![image-20201101053834126](/image-20201101053834126.png)
+![image-20201101053834126](image-20201101053834126.png)
 
 三个连接 
 
@@ -2541,7 +5548,7 @@ public String go() {
 
 缓存注解配置
 
-![image-20201228171806703](/image-20201228171806703.png)
+![image-20201228171806703](image-20201228171806703.png)
 
 #### 2、基础概念
 
@@ -2770,7 +5777,7 @@ public List<CategoryEntity> getLevel1Categorys() {
 
 流程图
 
-![image-20201228171552816](/image-20201228171552816.png)
+![image-20201228171552816](image-20201228171552816.png)
 
 
 
@@ -2784,13 +5791,13 @@ public List<CategoryEntity> getLevel1Categorys() {
 
 我在京东搜索 `Iphone`  他会显示出相对应的产品
 
-![image-20201104152544243](/image-20201104152544243.png)
+![image-20201104152544243](image-20201104152544243.png)
 
 
 
 那么我们开始对业务条件进行分析，并创建对应的VO类
 
-![image-20201104153118677](/image-20201104153118677.png)
+![image-20201104153118677](image-20201104153118677.png)
 
 好的创建出来了........
 
@@ -2852,7 +5859,7 @@ public class SearchParam {
 
 借鉴京东的实例来做参考
 
-![image-20201104153950990](/image-20201104153950990.png)
+![image-20201104153950990](image-20201104153950990.png)
 
 那么抽取实体类
 
@@ -3388,13 +6395,13 @@ private SearchResult buildSearchResult(SearchResponse response, SearchParam para
 
 #### 7.4.1基本数据渲染
 
-![image-20201105124530345](/image-20201105124530345.png)
+![image-20201105124530345](image-20201105124530345.png)
 
 
 
 遍历后显示结果
 
-![image-20201105124552833](/image-20201105124552833.png)
+![image-20201105124552833](image-20201105124552833.png)
 
 
 
@@ -3402,15 +6409,15 @@ private SearchResult buildSearchResult(SearchResponse response, SearchParam para
 
 品牌条件筛选
 
-![image-20201105125018666](/image-20201105125018666.png)
+![image-20201105125018666](image-20201105125018666.png)
 
 分类
 
-![image-20201105125250519](/image-20201105125250519.png)
+![image-20201105125250519](image-20201105125250519.png)
 
 属性筛选
 
-![image-20201105125718289](/image-20201105125718289.png)
+![image-20201105125718289](image-20201105125718289.png)
 
 
 
@@ -3460,7 +6467,7 @@ function searchProducts(name, value) {
 
 #### 7.4.4 分页数据筛选
 
-![image-20201105125925391](/image-20201105125925391.png)
+![image-20201105125925391](image-20201105125925391.png)
 
 
 
@@ -3468,11 +6475,11 @@ function searchProducts(name, value) {
 
 #### 7.4.5 页面排序功能
 
-![image-20201105130422378](/image-20201105130422378.png)
+![image-20201105130422378](image-20201105130422378.png)
 
 #### 7.4.6 页面价格筛选
 
-![image-20201105131105507](/image-20201105131105507.png)
+![image-20201105131105507](image-20201105131105507.png)
 
 JS
 
@@ -3492,11 +6499,11 @@ $("#skuPriceSearchBtn").click(function() {
 
 前端页面：
 
-![image-20201105131701322](/image-20201105131701322.png)
+![image-20201105131701322](image-20201105131701322.png)
 
 在返回Vo类中 新增了
 
-![image-20201105131841728](/image-20201105131841728.png)
+![image-20201105131841728](image-20201105131841728.png)
 
 Controller中 的解析方法中
 
@@ -3587,7 +6594,7 @@ new ThreadPollExecutor(corePoolSize,maximumPoolSize,keepAliveTime,TimeUnit,unit,
 
 #### 8.1.2 线程池的 7 大参数	
 
-![image-20201105154808826](/image-20201105154808826.png)
+![image-20201105154808826](image-20201105154808826.png)
 
 运行流程：
 
@@ -3638,7 +6645,7 @@ new ThreadPollExecutor(corePoolSize,maximumPoolSize,keepAliveTime,TimeUnit,unit,
 
 查询商品详情页逻辑比较复杂，有些数据还需要远程调用，必然需要花费更多的时间
 
-![image-20201105163535757](/image-20201105163535757.png )
+![image-20201105163535757](image-20201105163535757.png )
 
 假如商品详情页的每个查询，需要如下标注时间才能完成
 
@@ -3650,7 +6657,7 @@ new ThreadPollExecutor(corePoolSize,maximumPoolSize,keepAliveTime,TimeUnit,unit,
 
 CompletableFuture 提供了四个静态方法来创建一个异步操作
 
-![image-20201105185420349](/image-20201105185420349.png)
+![image-20201105185420349](image-20201105185420349.png)
 
 1、**runXxx 都是没有返回结果的，supplyXxxx都是可以获取返回结果的**
 
@@ -3685,7 +6692,7 @@ CompletableFuture 提供了四个静态方法来创建一个异步操作
 
 #### 8.2.2 计算完成时回调方法
 
-![image-20201105185821263](/image-20201105185821263.png)
+![image-20201105185821263](image-20201105185821263.png)
 
 whenComplete 可以处理正常和异常的计算结果，exceptionally 处理异常情况
 
@@ -3714,7 +6721,7 @@ CompletableFuture<Integer> future = CompletableFuture.supplyAsync(() -> {
 
 #### 8.2.3 handle 方法
 
-![image-20201105194503175](/image-20201105194503175.png)
+![image-20201105194503175](image-20201105194503175.png)
 
 和 complete 一样，可以对结果做最后的处理（可处理异常），可改变返回值
 
@@ -3737,7 +6744,7 @@ CompletableFuture<Integer> future = CompletableFuture.supplyAsync(() -> {
 
 #### 8.2.4 线程串行方法
 
-![image-20201105195632819](/image-20201105195632819.png)
+![image-20201105195632819](image-20201105195632819.png)
 
 thenApply 方法：**当一个线程依赖另一个线程时，获取上一个任务返回的结果，并返回当前任物的返回值**
 
@@ -3776,9 +6783,9 @@ thenRun 方法：**只要上面任务执行完成，就开始执行 thenRun ,只
 
 #### 8.2.5 两任务组合 - 都要完成
 
-![image-20210102044028142](/image-20210102044028142.png)
+![image-20210102044028142](image-20210102044028142.png)
 
-![image-20210102044044914](/image-20210102044044914.png)
+![image-20210102044044914](image-20210102044044914.png)
 
 
 
@@ -3829,9 +6836,9 @@ runAfterBoth:组合 两个 future，不需要获取 future 的结果，只需要
 
 #### 8.2.6 两任务组合 - 一个完成
 
-![image-20201106101904880](/image-20201106101904880.png)
+![image-20201106101904880](image-20201106101904880.png)
 
-![image-20201106101918013](/image-20201106101918013.png)
+![image-20201106101918013](image-20201106101918013.png)
 
 当两个任务中，任意一个future 任务完成时，执行任务
 
@@ -3868,7 +6875,7 @@ runAfterBoth:组合 两个 future，不需要获取 future 的结果，只需要
 
 #### 8.2.7 多任务组合
 
-![image-20201106104031315](/image-20201106104031315.png)
+![image-20201106104031315](image-20201106104031315.png)
 
 allOf：**等待所有任务完成**
 
@@ -3909,9 +6916,9 @@ anyOf:**只要有一个任务完成**
 
 ### 9.1 详情数据
 
-![image-20201229121729595](/image-20201229121729595.png)
+![image-20201229121729595](image-20201229121729595.png)
 
-![image-20201109080935340](/image-20201109080935340.png)
+![image-20201109080935340](image-20201109080935340.png)
 
 **需求分析：**通过 `skuId` 查询出商品的相关信息，图片、标题、价格，属性对应版本等等
 
@@ -4108,13 +7115,13 @@ public SkuItemVo item(Long skuId) throws ExecutionException, InterruptedExceptio
 - 为登录和注册创建一个服务
 - 讲提供的前端放到  `templates` 目录下
 
-![image-20201110084252039](/image-20201110084252039.png)
+![image-20201110084252039](image-20201110084252039.png)
 
 ### 10.2 前端验证码倒计时
 
 定义id 使用 `Jquery` 触发点击事件
 
-![image-20201110084521166](/image-20201110084521166.png)
+![image-20201110084521166](image-20201110084521166.png)
 
 Jquery
 
@@ -4160,29 +7167,29 @@ function timeoutChangeStyle() {
 
 对应效果
 
-![image-20201110084733372](/image-20201110084733372.png)
+![image-20201110084733372](image-20201110084733372.png)
 
 ### 10.3 整合短信验证码
 
 #### 1、短信验证我们选择的是阿里云的短信服务
 
-![image-20201110084936446](/image-20201110084936446.png)
+![image-20201110084936446](image-20201110084936446.png)
 
 #### 2、选择对应短信服务进行开通
 
 在云市场就能看到购买的服务
 
-![image-20201110085141506](/image-20201110085141506.png)
+![image-20201110085141506](image-20201110085141506.png)
 
 #### 3、验证短信功能是否能发送
 
 在购买短信的页面，能进行调试短信
 
-![image-20201110085315288](/image-20201110085315288.png)
+![image-20201110085315288](image-20201110085315288.png)
 
 输入对应手机号，appCode 具体功能不做演示
 
-![image-20201110085348103](/image-20201110085348103.png)
+![image-20201110085348103](image-20201110085348103.png)
 
 #### 4、使用 Java 测试短信是否能进行发送
 
@@ -4313,7 +7320,7 @@ public class UserRegistVo {
 
 设置 `name` 属性与 `Vo` 一致，方便将传递过来的数据转换成 JSON
 
-![image-20201110100732631](/image-20201110100732631.png)
+![image-20201110100732631](image-20201110100732631.png)
 
 #### 3、数据校验
 
@@ -4380,7 +7387,7 @@ public String regist(@Valid UserRegistVo vo, BindingResult result,
 
 #### 4、前端页面接收错误信息
 
-![image-20201110101306173](/image-20201110101306173.png)
+![image-20201110101306173](image-20201110101306173.png)
 
 #### 5、异常机制 & 用户注册
 
@@ -4524,13 +7531,13 @@ public MemberEntity login(MemberLoginVo vo) {
 
 我们在auth.gulimall.com中保存session，但是网址跳转到 gulimall.com中，取不出auth.gulimall.com中保存的session，这就造成了微服务下的session不同步问题
 
-![image-20201111103637615](/image-20201111103637615.png)
+![image-20201111103637615](image-20201111103637615.png)
 
 #### 1、Session同步解决方案-分布式下session共享问题
 
 同一个服务复制多个，但是session还是只能在一个服务上保存，浏览器也是只能读取到一个服务的session
 
-![image-20201111104758917](/image-20201111104758917.png)
+![image-20201111104758917](image-20201111104758917.png)
 
 
 
@@ -4540,19 +7547,19 @@ public MemberEntity login(MemberLoginVo vo) {
 
 
 
-![image-20201111104851977](/image-20201111104851977.png)
+![image-20201111104851977](image-20201111104851977.png)
 
 #### 3、Session共享问题解决-客户端存储
 
-![image-20201111104913888](/image-20201111104913888.png)
+![image-20201111104913888](image-20201111104913888.png)
 
 #### 4、Session共享问题解决-hash一致性
 
-![image-20201111105039741](/image-20201111105039741.png)
+![image-20201111105039741](image-20201111105039741.png)
 
 #### 5、Session共享问题解决-统一存储
 
-![image-20201111105135178](/image-20201111105135178.png)
+![image-20201111105135178](image-20201111105135178.png)
 
 ### 11.8 SpringSession整合
 
@@ -4560,33 +7567,33 @@ public MemberEntity login(MemberLoginVo vo) {
 
 - 进入到 Spring Framework
 
-![image-20201111144109273](/image-20201111144109273.png)
+![image-20201111144109273](image-20201111144109273.png)
 
 ##### 2、选择Spring Session文档
 
-![image-20201111144350506](/image-20201111144350506.png)
+![image-20201111144350506](image-20201111144350506.png)
 
-![image-20201111144438592](/image-20201111144438592.png)
+![image-20201111144438592](image-20201111144438592.png)
 
 ##### 3、开始使用Spring Session
 
-![image-20201111144639786](/image-20201111144639786.png)
+![image-20201111144639786](image-20201111144639786.png)
 
-![image-20201111144718176](/image-20201111144718176.png)
+![image-20201111144718176](image-20201111144718176.png)
 
 #### 2、整合SpringBoot
 
 ##### 1、添加Pom.xml依赖
 
-![image-20201111144914600](/image-20201111144914600.png)
+![image-20201111144914600](image-20201111144914600.png)
 
 ##### 2、application.yml 配置
 
-![image-20201111145601673](/image-20201111145601673.png)
+![image-20201111145601673](image-20201111145601673.png)
 
 ##### 3、reids配置
 
-![image-20201111150056671](/image-20201111150056671.png)
+![image-20201111150056671](image-20201111150056671.png)
 
 ##### 4、启动类加上 @EnableRedisHttpSession
 
@@ -4600,7 +7607,7 @@ public MemberEntity login(MemberLoginVo vo) {
 
 api文档参考：https://docs.spring.io/spring-session/docs/2.4.1/reference/html5/index.html#api-cookieserializer
 
-![image-20210101124234037](/image-20210101124234037.png)
+![image-20210101124234037](image-20210101124234037.png)
 
 ##### 指定redis序列化
 
@@ -4608,19 +7615,19 @@ api文档参考：https://docs.spring.io/spring-session/docs/2.4.1/reference/htm
 
 https://docs.spring.io/spring-session/docs/2.4.1/reference/html5/index.html#api-redisindexedsessionrepository-config
 
-![image-20210101124513827](/image-20210101124513827.png)
+![image-20210101124513827](image-20210101124513827.png)
 
 redis中json序列化
 
 官网文档地址：https://docs.spring.io/spring-session/docs/2.4.1/reference/html5/index.html#samples
 
-![image-20210101125216426](/image-20210101125216426.png)
+![image-20210101125216426](image-20210101125216426.png)
 
 提供的实例：
 
 https://github.com/spring-projects/spring-session/blob/2.4.1/spring-session-samples/spring-session-sample-boot-redis-json/src/main/java/sample/config/SessionConfig.java
 
-![image-20210101125303807](/image-20210101125303807.png)
+![image-20210101125303807](image-20210101125303807.png)
 
 ```java
 
@@ -4689,7 +7696,7 @@ public class GulimallSessionConfig {
 
 - 及那个 `request`、`response` 包装成 `SessionRepositoryRequestWrapper`
 
-  ![image-20201111195249024](/image-20201111195249024.png) 
+  ![image-20201111195249024](image-20201111195249024.png) 
 
 
 
@@ -4699,7 +7706,7 @@ public class GulimallSessionConfig {
 
 
 
-![image-20201110124933726](/image-20201110124933726.png)
+![image-20201110124933726](image-20201110124933726.png)
 
 QQ、微博，github等网站的用户量非常大，别的网站为了简化网站的登陆和注册逻辑，引入社交登录功能
 
@@ -4709,7 +7716,7 @@ QQ、微博，github等网站的用户量非常大，别的网站为了简化网
 
 2、引导跳转进 QQ 授权页
 
-![image-20201110124945111](/image-20201110124945111.png)
+![image-20201110124945111](image-20201110124945111.png)
 
 3、用户主动点击授权，跳回之前网页
 
@@ -4729,7 +7736,7 @@ QQ、微博，github等网站的用户量非常大，别的网站为了简化网
 
 相关流程分析
 
-![image-20201110154532752](/image-20201110154532752.png)
+![image-20201110154532752](image-20201110154532752.png)
 
 
 
@@ -4739,39 +7746,39 @@ QQ、微博，github等网站的用户量非常大，别的网站为了简化网
 
 
 
-![image-20201110154702360](/image-20201110154702360.png)
+![image-20201110154702360](image-20201110154702360.png)
 
 
 
 ##### 2、登录微博，进入微连接，选择网站接入
 
-![image-20201110160834589](/image-20201110160834589.png)
+![image-20201110160834589](image-20201110160834589.png)
 
 
 
 ##### 3、选择立即接入
 
-![image-20201110161001013](/image-20201110161001013.png)
+![image-20201110161001013](image-20201110161001013.png)
 
 ##### 4、创建自己的应用
 
-![image-20201110161032203](/image-20201110161032203.png)
+![image-20201110161032203](image-20201110161032203.png)
 
 ##### 5、我们可以在开发阶段
 
-![image-20201110161152105](/image-20201110161152105.png)
+![image-20201110161152105](image-20201110161152105.png)
 
 ##### 6、进入高级信息
 
-![image-20201110161407018](/image-20201110161407018.png)
+![image-20201110161407018](image-20201110161407018.png)
 
 ##### 7、添加测试账号
 
-![image-20201110161451881](/image-20201110161451881.png)
+![image-20201110161451881](image-20201110161451881.png)
 
 ##### 8、进入文档
 
-![image-20201110161634486](/image-20201110161634486.png)
+![image-20201110161634486](image-20201110161634486.png)
 
 
 
@@ -4781,31 +7788,31 @@ QQ、微博，github等网站的用户量非常大，别的网站为了简化网
 
 看不清，放大一点
 
-##### **微博登录流程**![image-20201231084733753](/image-20201231084733753.png)
+##### **微博登录流程**![image-20201231084733753](image-20201231084733753.png)
 
 ###### **注册流程**
 
-![image-20201231084909415](/image-20201231084909415.png)
+![image-20201231084909415](image-20201231084909415.png)
 
 ###### **账号密码登录流程：**
 
-![image-20201231012134722](/image-20201231012134722.png)
+![image-20201231012134722](image-20201231012134722.png)
 
 ###### **手机验证码发送流程：**
 
-![image-20201231012207446](/image-20201231012207446.png)
+![image-20201231012207446](image-20201231012207446.png)
 
 ##### 11.3.1 查看微博开放平台文档
 
 https://open.weibo.com/wiki/%E6%8E%88%E6%9D%83%E6%9C%BA%E5%88%B6%E8%AF%B4%E6%98%8E
 
-![image-20201111093019560](/image-20201111093019560.png)
+![image-20201111093019560](image-20201111093019560.png)
 
 
 
 ##### 11.3.2 点击微博登录后，跳转到微博授权页面
 
-![image-20201111093153199](/image-20201111093153199.png)
+![image-20201111093153199](image-20201111093153199.png)
 
 ##### 11.3.3 用户授权后调用回调接口，并带上参数code换取AccessToken
 
@@ -5139,9 +8146,9 @@ WebSQL
 
 购物车数据结构
 
-![image-20201113110938713](/image-20201113110938713.png)
+![image-20201113110938713](image-20201113110938713.png)
 
-![image-20201115154652394](/image-20201115154652394.png)
+![image-20201115154652394](image-20201115154652394.png)
 
 每一个购物项信息，都是一个对象，基本字段包括
 
@@ -5186,7 +8193,7 @@ redis中：
 
 ![image-20201115155054434]( /image-20201115155054434.png)
 
-![image-20210102202926973](/image-20210102202926973.png)
+![image-20210102202926973](image-20210102202926973.png)
 
 
 
@@ -5411,7 +8418,7 @@ public class CartInterceptor implements HandlerInterceptor {
 
 在页面点击加入购物车后将商品添加进购物车
 
-![image-20201115155956396](/image-20201115155956396.png)
+![image-20201115155956396](image-20201115155956396.png)
 
 需求分析：
 
@@ -5771,7 +8778,7 @@ Service
 
 消息发送的时间取决于业务执行的最长的时间
 
-![image-20210104205412477](/image-20210104205412477.png)
+![image-20210104205412477](image-20210104205412477.png)
 
 #### 应用解耦
 
@@ -5780,13 +8787,13 @@ Service
 只需要将请求发送给消息队列，其他的就不需要去处理了，节省了处理业务逻辑的时间
 
 
-![image-20210104210738678](/image-20210104210738678.png)
+![image-20210104210738678](image-20210104210738678.png)
 
 #### 流量消峰
 
 某一时刻如果请求特别的大，那就先把它放入消息队列，从而达到流量消峰的作用
 
-![image-20210104210725093](/image-20210104210725093.png)
+![image-20210104210725093](image-20210104210725093.png)
 
 流程图地址：https://www.processon.com/view/link/5fbda8c35653bb1d54f7077b
 
@@ -5822,7 +8829,7 @@ Service
 11. 市面上的MQ产品
     1. ActiveMQ、RabbitMQ、RocketMQ，kafka
 
-![image-20201116091205853](/image-20201116091205853.png)
+![image-20201116091205853](image-20201116091205853.png)
 
 
 
@@ -5876,7 +8883,7 @@ Exchange有4种类型：**direct(默认)**、**fanout**、**topic**，和**heade
 
 表示消息队列服务器实体
 
-![image-20201116100431093](/image-20201116100431093.png)
+![image-20201116100431093](image-20201116100431093.png)
 
 ### 13.4 Docker 安装RabbitMQ
 
@@ -5893,9 +8900,9 @@ docker update rabbitmq --restart=always
 
 ```
 
-![image-20201116102734767](/image-20201116102734767.png)
+![image-20201116102734767](image-20201116102734767.png)
 
-![image-20201116103446291](/image-20201116103446291.png)
+![image-20201116103446291](image-20201116103446291.png)
 
 ### 13.5 RabbitMQ 运行机制
 
@@ -5903,15 +8910,15 @@ AMQP 中的消息路由
 
 AMQP 中消息的路由过程和 Java 开发者熟悉的 JMS 存在一些差别，AMQP中增加了 **Exchange** 和 **Binding** 的角色 生产者把消息发布到 Exchange 上，消息最终到达队列并被消费者接收，而 Binding 决定交换器的消息应该发送给那个队列
 
-![image-20201116104235856](/image-20201116104235856.png)
+![image-20201116104235856](image-20201116104235856.png)
 
 **Exchange 类型**
 
 Exchange 分发消息时根据类型的不同分发策略有区别，目前共四种类型：direct、tanout、topic、headers header匹配AMQP消息的 header 而不是路由键，headers 交换器和 direct 交换器完全一致，但性能差能多，目前几乎用不到了，所以直接看另外三种类型
 
-![image-20201116104546717](/image-20201116104546717.png)
+![image-20201116104546717](image-20201116104546717.png)
 
-![image-20201116104918897](/image-20201116104918897.png)
+![image-20201116104918897](image-20201116104918897.png)
 
 ### 13.6 RabbitMQ 整合
 
@@ -6027,7 +9034,7 @@ spring:
 - **publisher** returnCallback 未投递到 queue 退回
 - **consumer** ack 机制
 
-![image-20201116163631107](/image-20201116163631107.png)
+![image-20201116163631107](image-20201116163631107.png)
 
 #### 可靠抵达 - ConfirmCallback
 
@@ -6083,13 +9090,13 @@ Spring的schedule 定时任务轮询数据库
 
 #### 使用场景
 
-![image-20201120120737525](/image-20201120120737525.png)
+![image-20201120120737525](image-20201120120737525.png)
 
 时效问题
 
 上一轮扫描刚好扫描，而这个时候刚好下了订单，就没有扫描到，下一轮扫描的时候，订单还没有过期，等到订单过期后30分钟才被扫描到
 
-![image-20201120120914320](/image-20201120120914320.png)
+![image-20201120120914320](image-20201120120914320.png)
 
 #### 消息的TTL（Time To Live）
 
@@ -6109,21 +9116,21 @@ Spring的schedule 定时任务轮询数据库
 
 #### 延时队列实现 - 1
 
-![image-20201120132805292](/image-20201120132805292.png)
+![image-20201120132805292](image-20201120132805292.png)
 
 延时队列实现 - 2
 
-![image-20201120132922164](/image-20201120132922164.png)
+![image-20201120132922164](image-20201120132922164.png)
 
 代码实现：
 
 下单场景
 
-![image-20201120133054368](/image-20201120133054368.png)
+![image-20201120133054368](image-20201120133054368.png)
 
 模式升级
 
-![image-20201120133258725](/image-20201120133258725.png)
+![image-20201120133258725](image-20201120133258725.png)
 
 代码实现：
 
@@ -6254,7 +9261,7 @@ public Binding orderReleaseOrderBinding(){
 
 #### 1、订单构成
 
-![image-20201117102129127](/image-20201117102129127.png)
+![image-20201117102129127](image-20201117102129127.png)
 
 ##### 1、用户信息
 
@@ -6362,7 +9369,7 @@ public Binding orderReleaseOrderBinding(){
 
 可概括如下图
 
-![image-20201117104613032](/image-20201117104613032.png)	
+![image-20201117104613032](image-20201117104613032.png)	
 
 1、订单创建与支付
 
@@ -6388,7 +9395,7 @@ public Binding orderReleaseOrderBinding(){
 
 在订单服务下准备好页面
 
-![image-20210105095210202](/image-20210105095210202.png)
+![image-20210105095210202](image-20210105095210202.png)
 
 可以发现订单结算页，包含以下信息:
 
@@ -6478,7 +9485,7 @@ Spring:
 
 #### 2、订单确认页
 
-![image-20210105142735857](/image-20210105142735857.png)
+![image-20210105142735857](image-20210105142735857.png)
 
 **根据图片中商品信息抽取成Vo**
 
@@ -7340,9 +10347,9 @@ Service
 
 https://opendocs.alipay.com/open/270/105900
 
-![image-20210108143131033](/image-20210108143131033.png)
+![image-20210108143131033](image-20210108143131033.png)
 
-![image-20210105093259313](/image-20210105093259313.png)
+![image-20210105093259313](image-20210105093259313.png)
 
 #### 5、收单
 
@@ -7412,7 +10419,7 @@ Service
 
 
 
-![image-20210105093437013](/image-20210105093437013.png)
+![image-20210105093437013](image-20210105093437013.png)
 
 - 订单在支付页，不支付，一直刷新，订单过期了才支付，订单状态改为已支付了，但是库存解锁了。
   - 使用支付宝自动收单功能解决。只要一段时间不支付，就不能支付了。
@@ -7566,7 +10573,7 @@ proxy_set_header X-Request-Id $Request_id
 
 在以往的单体应用中，我们多个业务操作使用同一条连接操作不同的表，一旦有异常我们很容易整体回滚
 
-![image-20201119115615054](/image-20201119115615054.png)
+![image-20201119115615054](image-20201119115615054.png)
 
 **Business**：我们具体的业务代码
 **Storage**：库存业务代码;扣库存
@@ -7641,7 +10648,7 @@ proxy_set_header X-Request-Id $Request_id
 
 机器宕机、网络异常、消息丢失、消息乱序、不可靠的TCP、存储数据丢失....
 
-![image-20201119170602679](/image-20201119170602679.png)
+![image-20201119170602679](image-20201119170602679.png)
 
 
 
@@ -7662,7 +10669,7 @@ CAP 原则又称 CAP 定理指的是在一个分布式系统中
 
 CAP 的原则是，这三个要素最多只能满足两个点，**不可能三者兼顾**
 
-![image-20201119194354467](/image-20201119194354467.png)
+![image-20201119194354467](image-20201119194354467.png)
 
 
 
@@ -7715,7 +10722,7 @@ MySQL 从5.5版本开始支持，Sql Server 2005 开始支持，oracle7 开始�
 
 其中，如果有任何一个数据库否认这次提交，那么所有数据库都会要求回滚他们在此事务中的那部分信息
 
-![image-20201120090516086](/image-20201120090516086.png)
+![image-20201120090516086](image-20201120090516086.png)
 
 - XA协议比较简单，而且一旦商业数据库实现了XA协议，使用分布式事务的成本也比较低。
 - XA性能不理想，特别是在交易下单链路，往往并发量很高，XA无法满足高并发场景
@@ -7730,7 +10737,7 @@ MySQL 从5.5版本开始支持，Sql Server 2005 开始支持，oracle7 开始�
 柔性事务:遵循BASE理论，最终一致性;
 与刚性事务不同，柔性事务允许一定时间内，不同节点的数据不一致，但要求最终一致。
 
-![image-20201120090923734](/image-20201120090923734.png)
+![image-20201120090923734](image-20201120090923734.png)
 
 一阶段 prepare 行为:调用自定义的 prepare 逻辑。
 二阶段 commit 行为:调用自定义的 commit 逻辑。
@@ -7767,19 +10774,19 @@ https://opendocs.alipay.com/open/200/105304 网页移动应用文档
 
 https://opendocs.alipay.com/open/54/cyz7do 相关Demo
 
-![image-20201122123349754](/image-20201122123349754.png)
+![image-20201122123349754](image-20201122123349754.png)
 
-![image-20201122114005616](/image-20201122114005616.png)密码
+![image-20201122114005616](image-20201122114005616.png)密码
 
 创建应用
 
-![image-20201122113922427](/image-20201122113922427.png)
+![image-20201122113922427](image-20201122113922427.png)
 
 ### 3、使用沙箱进行测试
 
 https://openhome.alipay.com/platform/appDaily.htm?tab=info
 
-![image-20201122125716179](/image-20201122125716179.png)
+![image-20201122125716179](image-20201122125716179.png)
 
 ### 4、什么是公钥、私钥、加密、签名和验签?
 
@@ -7790,7 +10797,7 @@ https://openhome.alipay.com/platform/appDaily.htm?tab=info
 
 一对密钥生成后，保存在生成者手里的就是私钥，生成者发布出去大家用的就是公钥
 
-![image-20201122174141878](/image-20201122174141878.png)
+![image-20201122174141878](image-20201122174141878.png)
 
 ### 5、支付宝支付流程
 
@@ -8033,11 +11040,11 @@ public class PayWebController {
 
 最后生成页面
 
-![image-20210108162512457](/image-20210108162512457.png)
+![image-20210108162512457](image-20210108162512457.png)
 
 #### 2、用户点击付款
 
-![image-20210108162541917](/image-20210108162541917.png)
+![image-20210108162541917](image-20210108162541917.png)
 
 #### 3、付款成功后跳转到成功页面
 
@@ -8058,7 +11065,7 @@ public class PayWebController {
 
 > 这里跳转到的**会员服务的订单页面**，需要自己处理请求,**已在14.4.4.3节完成该功能**
 
-![image-20210108162610017](/image-20210108162610017.png)
+![image-20210108162610017](image-20210108162610017.png)
 
 ##### 1、支付成功后异步回调接口处理
 
@@ -8210,11 +11217,11 @@ Service
 
 #### 秒杀方式一
 
-![image-20210108164514905](/image-20210108164514905.png)
+![image-20210108164514905](image-20210108164514905.png)
 
 #### 秒杀方式2
 
-![image-20210108164555957](/image-20210108164555957.png)
+![image-20210108164555957](image-20210108164555957.png)
 
 ### 19.3 限流
 
@@ -8233,7 +11240,7 @@ Service
 
 http://www.quartz-scheduler.org/documentation/quartz-2.3.0/tutorials/crontrigger.html
 
-![image-20201123095003586](/image-20201123095003586.png)
+![image-20201123095003586](image-20201123095003586.png)
 
 特殊字符：
 
@@ -8257,11 +11264,11 @@ http://www.quartz-scheduler.org/documentation/quartz-2.3.0/tutorials/crontrigger
 
 阅读技巧：秒 分 时 日 月 周
 
-![image-20201123095544841](/image-20201123095544841.png)
+![image-20201123095544841](image-20201123095544841.png)
 
 使用谷歌翻译后中文意思是这样的
 
-![image-20201123095718609](/image-20201123095718609.png)
+![image-20201123095718609](image-20201123095718609.png)
 
 ### 20.3 SpringBoot整合定时任务
 
