@@ -2967,7 +2967,7 @@ Mapping 是用来定义一个文档（document）,以及他所包含的属性（
 
 - 哪些字符串属性应该被看做全文本属性（full text fields）
 - 那些属性包含数字，日期或者地理位置
-- 文档中的所有属性是能被索引（_all 配置）
+- 文档的属性是否能被索引（_all 配置）
 - 日期的格式
 - 自定义映射规则来执行动态添加属性
 
@@ -3851,9 +3851,65 @@ echo "..." > /mydata/nginx/html/fenci.txt
 
 
 
+### 5、附录：安装Nginx
 
+* 随便启动一个nginx实例，只是为了复制出配置
 
-### 1.5 Elasticsearch - Rest - client
+  ```shell
+  docker run -p80:80 --name nginx -d nginx:1.10   
+  ```
+
+* 将容器内的配置文件拷贝到/mydata/nginx/conf/ 下
+
+  ```shell
+  mkdir -p /mydata/nginx/html
+  mkdir -p /mydata/nginx/logs
+  mkdir -p /mydata/nginx/conf
+  docker container cp nginx:/etc/nginx/*  /mydata/nginx/conf/ 
+  #由于拷贝完成后会在config中存在一个nginx文件夹，所以需要将它的内容移动到conf中
+  mv /mydata/nginx/conf/nginx/* /mydata/nginx/conf/
+  rm -rf /mydata/nginx/conf/nginx
+  ```
+
+* 终止原容器：
+
+  ```shell
+  docker stop nginx
+  ```
+
+* 执行命令删除原容器：
+
+  ```shell
+  docker rm nginx
+  ```
+
+* 创建新的Nginx，执行以下命令
+
+  ```shell
+  docker run -p 80:80 --name nginx \
+   -v /mydata/nginx/html:/usr/share/nginx/html \
+   -v /mydata/nginx/logs:/var/log/nginx \
+   -v /mydata/nginx/conf/:/etc/nginx \
+   -d nginx:1.10
+  ```
+
+* 设置开机启动nginx
+
+  ```
+  docker update nginx --restart=always
+  ```
+
+  
+
+* 创建“/mydata/nginx/html/index.html”文件，测试是否能够正常访问
+
+  ```
+  echo '<h2>hello nginx!</h2>' >index.html
+  ```
+
+  访问：http://ngix所在主机的IP:80/index.html
+
+### 1.5 java集成ES的工具  Elasticsearch - Rest - client
 
 1、9300：TCP
 
@@ -3875,6 +3931,8 @@ Elasticsearch - Rest - Client：官方RestClient，封装了 ES 操作，API层�
 
 最终选择 Elasticsearch - Rest - Client （elasticsearch - rest - high - level - client）
 
+
+
 #### 1.5.1 SpringBoot 整合
 
 1、Pom.xml
@@ -3891,6 +3949,27 @@ Elasticsearch - Rest - Client：官方RestClient，封装了 ES 操作，API层�
 为什么要导入这个？这个配置那里来的？
 
 官网：https://www.elastic.co/guide/en/elasticsearch/client/java-rest/current/java-rest-high-getting-started-maven.html
+
+在spring-boot-dependencies中所依赖的ELK版本位6.8.7
+
+```
+    <elasticsearch.version>6.8.7</elasticsearch.version>
+```
+
+![image-20200511074437763](/image-20200511074437763.png)
+
+
+
+需要在项目中将它改为7.6.2
+
+```xml
+    <properties>
+        ...
+        <elasticsearch.version>7.6.2</elasticsearch.version>
+    </properties>
+```
+
+ 
 
 #### 1.5.2 Config配置
 
@@ -3941,6 +4020,7 @@ public class GulimallElasticsearchConfig {
 
 > 测试是否注入成功
 
+https://www.elastic.co/guide/en/elasticsearch/client/java-rest/current/java-rest-high-document-index.html 
 ```java
 @Autowired
 private RestHighLevelClient client;
@@ -3976,10 +4056,89 @@ public void indexData() throws IOException {
 }
 ```
 
-测试复杂检索
+测试前：
+
+![image-20200511111618183](/image-20200511111618183.png)
+
+测试后：
+
+![image-20200511112025327](/image-20200511112025327.png)
+
+#### 2）测试获取数据
+
+ https://www.elastic.co/guide/en/elasticsearch/client/java-rest/current/java-rest-high-search.html 
+
+```java
+    @Test
+    public void searchData() throws IOException {
+        GetRequest getRequest = new GetRequest(
+                "users",
+                "_-2vAHIB0nzmLJLkxKWk");
+
+        GetResponse getResponse = client.get(getRequest, RequestOptions.DEFAULT);
+        System.out.println(getResponse);
+        String index = getResponse.getIndex();
+        System.out.println(index);
+        String id = getResponse.getId();
+        System.out.println(id);
+        if (getResponse.isExists()) {
+            long version = getResponse.getVersion();
+            System.out.println(version);
+            String sourceAsString = getResponse.getSourceAsString();
+            System.out.println(sourceAsString);
+            Map<String, Object> sourceAsMap = getResponse.getSourceAsMap();
+            System.out.println(sourceAsMap);
+            byte[] sourceAsBytes = getResponse.getSourceAsBytes();
+        } else {
+
+        }
+    }
+```
+
+
+
+**测试复杂检索**
+
+**搜索address中包含mill的所有人的年龄分布以及平均年龄，平均薪资**
+
+
+```json
+GET bank/_search
+{
+  "query": {
+    "match": {
+      "address": "Mill"
+    }
+  },
+  "aggs": {
+    "ageAgg": {
+      "terms": {
+        "field": "age",
+        "size": 10
+      }
+    },
+    "ageAvg": {
+      "avg": {
+        "field": "age"
+      }
+    },
+    "balanceAvg": {
+      "avg": {
+        "field": "balance"
+      }
+    }
+  }
+}
+```
+
+
 
 ```java
  @Test
+ /**
+     * 复杂检索:在bank中搜索address中包含mill的所有人的年龄分布以及平均年龄，平均薪资
+     * @throws IOException
+     */
     public void searchTest() throws IOException {
         // 1、创建检索请求
         SearchRequest searchRequest = new SearchRequest();
@@ -4044,8 +4203,12 @@ public void indexData() throws IOException {
 
 结果：
 
-```java
-accout:GulimallSearchApplicationTests.Accout(account_number=970, balance=19648, firstname=Forbes, lastname=Wallace, age=28, gender=M, address=990 Mill Road, employer=Pheast, email=forbeswallace@pheast.com, city=Lopezo, state=AK)accout:GulimallSearchApplicationTests.Accout(account_number=136, balance=45801, firstname=Winnie, lastname=Holland, age=38, gender=M, address=198 Mill Lane, employer=Neteria, email=winnieholland@neteria.com, city=Urie, state=IL)accout:GulimallSearchApplicationTests.Accout(account_number=345, balance=9812, firstname=Parker, lastname=Hines, age=38, gender=M, address=715 Mill Avenue, employer=Baluba, email=parkerhines@baluba.com, city=Blackgum, state=KY)accout:GulimallSearchApplicationTests.Accout(account_number=472, balance=25571, firstname=Lee, lastname=Long, age=32, gender=F, address=288 Mill Street, employer=Comverges, email=leelong@comverges.com, city=Movico, state=MT)年龄:38
+```bash
+Account(accountNumber=970, balance=19648, firstname=Forbes, lastname=Wallace, age=28, gender=M, address=990 Mill Road, employer=Pheast, email=forbeswallace@pheast.com, city=Lopezo, state=AK)
+Account(accountNumber=136, balance=45801, firstname=Winnie, lastname=Holland, age=38, gender=M, address=198 Mill Lane, employer=Neteria, email=winnieholland@neteria.com, city=Urie, state=IL)
+Account(accountNumber=345, balance=9812, firstname=Parker, lastname=Hines, age=38, gender=M, address=715 Mill Avenue, employer=Baluba, email=parkerhines@baluba.com, city=Blackgum, state=KY)
+Account(accountNumber=472, balance=25571, firstname=Lee, lastname=Long, age=32, gender=F, address=288 Mill Street, employer=Comverges, email=leelong@comverges.com, city=Movico, state=MT)
+年龄:38
 个数:2
 年龄:28
 个数:1
@@ -4058,15 +4221,7 @@ accout:GulimallSearchApplicationTests.Accout(account_number=970, balance=19648, 
 
 官网：https://www.elastic.co/guide/en/elasticsearch/client/java-rest/current/java-rest-high-search.html#java-rest-high-search-request-optional
 
-ELK  
 
-Elasticsearch 用于检索数据
-
-logstach：存储数据
-
-Kiban:视图化查看数据
-
-![image-20201027120603889](image-20201027120603889.png)
 
 
 
@@ -4076,94 +4231,164 @@ Kiban:视图化查看数据
 
 # 2、商城业务 & 商品上架
 
+检索技术栈评估：
+
+以日志分析常用的ELK检索框架为例。
+
+ELK  
+
+Elasticsearch 用于存储检索数据。相对于Mysql的优势，基于内存检索，请求处理速度快。对全文检索支持更好。天生支持集群部署，可将海量数据分片存储。
+
+logstach：收集数据
+
+Kibana:视图化查看数据
+
+![image-20201027120603889](image-20201027120603889.png)
+
 上架的商品才可以在网站展示
 
 上架的商品需要可以检索
 
-### 2.1 商品Mapping
+### 2.1 商品的ES数据数据模型设计 -sku与spu信息的存储
 
-分析：商品上架在 es 中是存入 sku 还是 spu ？
+ES是基于内存数据检索的，内存相对硬盘要昂贵许多。所以设计检索数据时要考虑下存储成本。非必要的字段或信息，不做存储或简化存储。比如，sku的库存情况，我们并不在ES里存储每个sku的数量，而是只设计一个bool字段，标记有无库存。不用于检索的属性，就在mapping里设计成非检索字段。
+
+在检索界面展示的spu规格参数，是当前检索出的所有sku，分析出来的，是根据检索结果动态变化的。换句话说，检索位置的规格参数及数值，一定匹配了当前检索出的某些sku。
+
+总之，我们检索sku时，一定也要查相应的spu规格参数。
+
+而一个spu通常对应多个sku。在ES存储时有两种方案。
+
+**方案一  单索引设计。**在每个sku信息里存储对应的spu规格参数等信息。优点是检索方便，检索sku可以直接拿到对应的spu规格参数信息。缺点是spu信息冗余，占用空间多。
+
+```json
+{
+    skuId:1
+    spuId:11
+    skyTitile:华为xx
+    price:999
+    saleCount:99
+    attr:[
+        {尺寸:5},
+        {CPU:高通945},
+        {分辨率:全高清}
+	]
+}
+缺点：如果每个sku都存储规格参数(如尺寸)，会有冗余存储，因为每个spu对应的sku的规格参数都一样
+```
+
+**方案二 双索引设计。**sku和spu分别建里索引。
+
+```json
+sku索引
+{
+    spuId:1
+    skuId:11
+}
+attr索引
+{
+    skuId:11
+    attr:[
+        {尺寸:5},
+        {CPU:高通945},
+        {分辨率:全高清}
+	]
+}
+搜索 小米；可能有粮食，手机，电器
+10000个sku，可能对应4000个spu，
+分步，再根据4000个spu查询对应的属性；
+只考虑spuid，通过esClient 传输了4000个id，long 8B*4000=32000B=32KB
+10000个人检索，就是320MB
+百万并发来了，检索一下，就是32GB。别的不说，只是网络传输就需要很长时间。
+
+
+结论：如果将规格参数单独建立索引，以后可能会出现检索时出现大量数据网络传输的问题，会引起网络阻塞。
+
+```
+
+总之，两种方案都可以，在当前高并发场景下，我们采取空间换时间的策略。使用方案一。
+
+
+
+### 2.1 商品检索数据的Mapping设计
 
 1、检索的时候输入名字，是需要按照 sku 的 title进行全文检索的
 
-2、检索使用商品规格，规格是 spu 的公共属性，每个 spu 是一样的
+2、有些字段不需要做为检索条件，所以设计为keyword，index为false，doc_values为false
 
-3、按照分类 id 进去的 都是直接列出 spu的，还可以切换
 
-4、我们如果将 sku 的 全量信息 保存在 es 中 （包括 spu 属性），就太多量字段了
 
-5、如果我们将 spu 以及他包含的 sku 信息保存到 es 中，也可以方
-
-```http
+```json
 PUT product
 {
-  "mappings":{
-    "properties":{
-      "skuId":{
-        "type":"long"
-      },
-       "spuId":{
-        "type":"keyword"
-      },
-       "skuTitle":{
-        "type":"text",
-        "analyzer": "ik_smart"
-      },
-       "skuPrice":{
-        "type":"keyword"
-      },
-       "skuImg":{
-        "type":"text",
-        "analyzer": "ik_smart"
-      },
-       "saleCount":{
-        "type":"long"
-      },
-       "hasStock":{
-        "type":"boolean"
-      },
-      "hotScore":{
-        "type":"long"
-      },
-      "brandId":{
-        "type":"long"
-      },
-      "catelogId":{
-        "type":"long"
-      },
-      "brandName":{
-        "type":"keyword",
-        "index": false,
-        "doc_values": false
-      },
-      "brandImg":{
-        "type":"keyword",
-         "index": false,
-        "doc_values": false
-      },
-      "catalogName":{
-        "type":"keyword",
-         "index": false,
-         "doc_values": false
-      },
-      "attrs":{
-        "type":"nested",
+    "mappings":{
         "properties": {
-          "attrId":{
-            "type":"long"
-          },
-          "attrName":{
-            "type":"keyword",
-            "index":false,
-            "doc_values":false
-          },
-          "attrValue": {
-            "type":"keyword"
-          }
+            "skuId":{
+                "type": "long"
+            },
+            "spuId":{
+                "type": "keyword" # 不可分词
+            },
+            "skuTitle": {
+                "type": "text",
+                "analyzer": "ik_smart" # 指定该属性使用中文分词器
+            },
+            "skuPrice": {
+                "type": "keyword" # 保证精度问题
+            },
+            "skuImg":{
+                "type": "keyword", # 图片地址不需要分词
+                "index": false, # 不需要检索，这样保存数据时不用建索引，节省时间空间
+                "doc_values": false # 不需要做分组（aggr）等分析 节省时间空间
+            },
+            "saleCount":{
+                "type":"long"
+            },
+            "hasStock": {
+                "type": "boolean"
+            },
+            "hotScore": {
+                "type": "long"
+            },
+            "brandId": {
+                "type": "long"
+            },
+            "catalogId": {
+                "type": "long"
+            },
+            "brandName": {
+                "type": "keyword",
+                "index": false,
+                "doc_values": false
+            },
+            "brandImg":{
+                "type": "keyword",
+                 "index": false,
+                "doc_values": false
+            },
+            "catalogName": {
+                "type": "keyword",
+                "index": false,
+                "doc_values": false
+            },
+            "attrs": {
+                "type": "nested", # 
+                "properties": {
+                    "attrId": {
+                        "type": "long"
+                    },
+                    "attrName": {
+                        "type": "keyword",
+                        "index": false,
+                        "doc_values": false
+                    },
+                    "attrValue": {
+                        "type": "keyword"
+                    }
+                }
+            }
         }
-      }
     }
-  }
 }
 ```
 
