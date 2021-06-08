@@ -2,8 +2,8 @@
 
 typora-root-url: images
 typora-copy-images-to: images
----
 
+---
 
 
 # 谷粒商城高级篇
@@ -4285,10 +4285,10 @@ sku索引
     spuId:1
     skuId:11
 }
-attr索引
+spu索引
 {
-    skuId:11
-    attr:[
+    spuId:11
+    attrs:[
         {尺寸:5},
         {CPU:高通945},
         {分辨率:全高清}
@@ -4315,6 +4315,8 @@ attr索引
 1、检索的时候输入名字，是需要按照 sku 的 title进行全文检索的
 
 2、有些字段不需要做为检索条件，所以设计为keyword，index为false，doc_values为false
+
+2、nested类型的使用
 
 
 
@@ -4372,7 +4374,7 @@ PUT product
                 "doc_values": false
             },
             "attrs": {
-                "type": "nested", # 
+                "type": "nested", # attrs
                 "properties": {
                     "attrId": {
                         "type": "long"
@@ -4392,7 +4394,119 @@ PUT product
 }
 ```
 
+### 2.1 避免嵌套子对象扁平化的nested类型
 
+ 文档子对象默认为object类型，会被扁平化处理。由于扁平化处理，有多个子对象的话，子对象内属性的关联性被抹除了。
+
+**object类型的扁平化**
+
+存储有多个子对象的文档
+
+如果我们依赖[字段自动映射](https://www.elastic.co/guide/cn/elasticsearch/guide/current/dynamic-mapping.html),那么 `comments` 字段会自动映射为 `object` 类型。
+
+由于所有的信息都在一个文档中,当我们查询时就没有必要去联合文章和评论文档,查询效率就很高。
+
+但是当我们使用如下查询时,上面的文档也会被当做是符合条件的结果：
+
+```bash
+PUT /my_index/blogpost/1
+{
+  "title": "Nest eggs",
+  "body":  "Making your money work...",
+  "tags":  [ "cash", "shares" ],
+  "comments": [ 
+    {
+      "name":    "John Smith",
+      "comment": "Great article",
+      "age":     28,
+      "stars":   4,
+      "date":    "2014-09-01"
+    },
+    {
+      "name":    "Alice White",
+      "comment": "More like this please",
+      "age":     31,
+      "stars":   5,
+      "date":    "2014-10-22"
+    }
+  ]
+}
+```
+
+由于所有的信息都在一个文档中,当我们查询时就没有必要去联合文章和评论文档,查询效率就很高。
+
+但是当我们使用如下查询时,上面的文档也会被当做是符合条件的结果：
+
+```json
+GET /_search
+{
+  "query": {
+    "bool": {
+      "must": [
+        { "match": { "name": "Alice" }},
+        { "match": { "age":  28      }} 
+      ]
+    }
+  }
+}
+```
+
+正如我们在 [对象数组](https://www.elastic.co/guide/cn/elasticsearch/guide/current/complex-core-fields.html#object-arrays) 中讨论的一样,出现上面这种问题的原因是 JSON 格式的文档被处理成如下的扁平式键值对的结构。
+
+```json
+{
+  "title":            [ eggs, nest ],
+  "body":             [ making, money, work, your ],
+  "tags":             [ cash, shares ],
+  "comments.name":    [ alice, john, smith, white ],
+  "comments.comment": [ article, great, like, more, please, this ],
+  "comments.age":     [ 28, 31 ],
+  "comments.stars":   [ 4, 5 ],
+  "comments.date":    [ 2014-09-01, 2014-10-22 ]
+}
+```
+
+`Alice` 和 31 、 `John` 和 `2014-09-01` 之间的相关性信息不再存在。虽然 `object` 类型 (参见 [内部对象](https://www.elastic.co/guide/cn/elasticsearch/guide/current/complex-core-fields.html#inner-objects)) 在存储 *单一对象* 时非常有用,但对于对象数组的搜索而言,毫无用处。
+
+
+
+**嵌套对象类型nested**
+
+*嵌套对象* 就是来解决这个问题的。将 `comments` 字段类型设置为 `nested` 而不是 `object` 后,每一个嵌套对象都会被索引为一个 *隐藏的独立文档* ,举例如下:
+
+```json
+{ # 第一个 嵌套文档
+  "comments.name":    [ john, smith ],
+  "comments.comment": [ article, great ],
+  "comments.age":     [ 28 ],
+  "comments.stars":   [ 4 ],
+  "comments.date":    [ 2014-09-01 ]
+}
+{ # 第二个 嵌套文档
+  "comments.name":    [ alice, white ],
+  "comments.comment": [ like, more, please, this ],
+  "comments.age":     [ 31 ],
+  "comments.stars":   [ 5 ],
+  "comments.date":    [ 2014-10-22 ]
+}
+{ # 根文档 或者也可称为父文档
+  "title":            [ eggs, nest ],
+  "body":             [ making, money, work, your ],
+  "tags":             [ cash, shares ]
+}
+```
+
+在独立索引每一个嵌套对象后,对象中每个字段的相关性得以保留。我们查询时,也仅仅返回那些真正符合条件的文档。
+
+不仅如此,由于嵌套文档直接存储在文档内部,查询时嵌套文档和根文档联合成本很低,速度和单独存储几乎一样。
+
+嵌套文档是隐藏存储的,我们不能直接获取。如果要增删改一个嵌套对象,我们必须把整个文档重新索引才可以。值得注意的是,查询的时候返回的是整个文档,而不是嵌套文档本身。
+
+> 总结：object类型中，一个子对象数组，被扁平化。变成了一个个父对象的，数组类型的属性。
+>
+> nested类型，保证了子对象之间的独立性。用户可以对某个子对象进行检索。
+
+https://www.elastic.co/guide/cn/elasticsearch/guide/current/nested-objects.html
 
 ### 2.2 商品上架接口编写
 
@@ -4400,7 +4514,7 @@ PUT product
 
 上架商品、将该商品相关属性上传到 Es中 为搜索服务做铺垫
 
-<img src="/image-20201028152104489.png" alt="image-20201028152104489" style="zoom:200%;" />
+<img src="image-20201028152104489.png" alt="image-20201028152104489" style="zoom:200%;" />
 
 Controller
 
@@ -4429,7 +4543,7 @@ public void up(Long spuId) {
     // 取出 Skuid 组成集合
     List<Long> skuIds = skus.stream().map(SkuInfoEntity::getSkuId).collect(Collectors.toList());
 
-    //TODO 4、查询当前 sku 的所有可以用来被检索的规格属性
+    //TODO 2、查询当前 spu 的所有可以用来被检索的规格参数属性
     List<ProductAttrValueEntity> attrValueEntities = attrValueService.baseAttrListforspu(spuId);
 
     // 返回所有 attrId
@@ -4437,10 +4551,10 @@ public void up(Long spuId) {
         return attr.getAttrId();
     }).collect(Collectors.toList());
 
-    // 根据 attrIds 查询出 检索属性，pms_attr表中 search_type为一 则是检索属性
+    // 3、找出spu的attrIds中，哪些属于检索属性（pms_attr表中 search_type为1则是检索属性）
     List<Long> searchAttrIds = attrService.selectSearchAttrs(attrIds);
 
-    // 将查询出来的 attr_id 放到 set 集合中 用来判断 attrValueEntities 是否包含 attrId
+    // 找出spu的属性值中，哪些属于可检索的属性值（将查询出来的 attr_id 放到 set 集合中 用来判断 attrValueEntities 是否包含 attrId）
     Set<Long> idSet = new HashSet<>(searchAttrIds);
 
     List<SkuEsModel.Attrs> attrList = attrValueEntities.stream().filter(item -> {
@@ -4454,7 +4568,7 @@ public void up(Long spuId) {
     }).collect(Collectors.toList());
 
 
-    //TODO 1、发送远程调用，库存系统查询是否有库存
+    // 4、发送远程调用，库存系统查询是否有库存
     Map<Long, Boolean> stockMap = null;
     try {
         R r = wareFeignService.getSkuHasStock(skuIds);
@@ -4467,7 +4581,7 @@ public void up(Long spuId) {
         e.printStackTrace();
     }
 
-    // 2、封装每个 sku 的信息
+    // 5、封装每个 sku 的信息
     Map<Long, Boolean> finalStockMap = stockMap;
     List<SkuEsModel> upProducts = skus.stream().map(sku -> {
         // 组装需要查询的数据
@@ -4476,7 +4590,7 @@ public void up(Long spuId) {
         skuEsModel.setSkuPrice(sku.getPrice());
         skuEsModel.setSkuImg(sku.getSkuDefaultImg());
 
-        // 设置属性
+        // 设置对应spu的规格参数
         skuEsModel.setAttrs(attrList);
 
         // 设置库存信息
@@ -4489,7 +4603,7 @@ public void up(Long spuId) {
         //TODO 2、热度频分 0
         skuEsModel.setHotScore(0L);
 
-        //TODO 3、查询品牌名字和分类的信息
+        //3、查询品牌名字和分类的信息
         BrandEntity brandEntity = brandService.getById(skuEsModel.getBrandId());
         skuEsModel.setBrandName(brandEntity.getName());
         skuEsModel.setBrandImg(brandEntity.getLogo());
@@ -4499,8 +4613,7 @@ public void up(Long spuId) {
         return skuEsModel;
     }).collect(Collectors.toList());
 
-
-    //TODO 5、将数据发送给 es保存 ，直接发送给 search服务
+    // 5、将数据发给es进行保存，直接发送给 search服务
     R r = esFeignClient.productStatusUp(upProducts);
     if (r.getCode() == 0) {
         // 远程调用成功
@@ -4511,9 +4624,10 @@ public void up(Long spuId) {
         //TODO 7、重复调用？ 接口冥等性 重试机制
 
         /**
+         * Feign调用流程
          * 1、构造请求数据，将对象转成json
          * RequestTemplate template = buildTemplateFromArgs.create(argv);
-         * 2、发送请求进行执行(执行成功进行解码)
+         * 2、发送请求进行执行(执行成功会进行解码响应数据)
          *  executeAndDecode(template);
          * 3、执行请求会有重试机制
          *  while (true) {
@@ -4526,6 +4640,7 @@ public void up(Long spuId) {
          *              throw cause;
          *         }
          *         continute
+         *	}
          */
     }
 }
@@ -4835,6 +4950,8 @@ public Map<String, List<Catelog2Vo>> getCatelogJson() {
 
 - 查询到一级分类，根据一级分类查询出二级分类并设置对应Vo对象，以此类推
 
+<img src="Snipaste_2020-09-06_20-38-59.png" style="zoom:60%;" />
+
 
 
 # 4、商城业务 & Nginx 域名访问
@@ -4859,6 +4976,8 @@ vi nginx.conf 文件后在底部有该条语句：
 修改
 
 ![image-20201029050136324](image-20201029050136324.png)
+
+> nginx代理过程，请求进来，根据请求url匹配一个location，再根据location匹配指定的server。
 
 
 
@@ -4913,7 +5032,91 @@ http {
 
 
 
+```shell
+user  nginx;
+worker_processes  1;
 
+error_log  /var/log/nginx/error.log warn;
+pid        /var/run/nginx.pid;
+
+#event块
+events {
+    worker_connections  1024;
+}
+
+#http块
+http {
+    include       /etc/nginx/mime.types;
+    default_type  application/octet-stream;
+
+    log_format  main  '$remote_addr - $remote_user [$time_local] "$request" '
+                      '$status $body_bytes_sent "$http_referer" '
+                      '"$http_user_agent" "$http_x_forwarded_for"';
+
+    access_log  /var/log/nginx/access.log  main;
+
+    sendfile        on;
+    #tcp_nopush     on;
+
+    keepalive_timeout  65;
+
+    #gzip  on;
+    
+    upstream gulimall{
+	server 192.168.43.201:88;
+    }    
+
+    include /etc/nginx/conf.d/*.conf;
+    ############################################################################
+    #/etc/nginx/conf.d/default.conf 的server块
+    server {
+    listen       80;
+    server_name  localhost;
+
+    #charset koi8-r;
+    #access_log  /var/log/nginx/log/host.access.log  main;
+
+    location / {
+        root   /usr/share/nginx/html;
+        index  index.html index.htm;
+    }
+
+    #error_page  404              /404.html;
+
+    # redirect server error pages to the static page /50x.html
+    #
+    error_page   500 502 503 504  /50x.html;
+    location = /50x.html {
+        root   /usr/share/nginx/html;
+    }
+
+    # proxy the PHP scripts to Apache listening on 127.0.0.1:80
+    #
+    #location ~ \.php$ {
+    #    proxy_pass   http://127.0.0.1;
+    #}
+
+    # pass the PHP scripts to FastCGI server listening on 127.0.0.1:9000
+    #
+    #location ~ \.php$ {
+    #    root           html;
+    #    fastcgi_pass   127.0.0.1:9000;
+    #    fastcgi_index  index.php;
+    #    fastcgi_param  SCRIPT_FILENAME  /scripts$fastcgi_script_name;
+    #    include        fastcgi_params;
+    #}
+
+    # deny access to .htaccess files, if Apache's document root
+    # concurs with nginx's one
+    #
+    #location ~ /\.ht {
+    #    deny  all;
+    #}
+}
+
+}
+
+```
 
 
 
@@ -4923,15 +5126,96 @@ http {
 
 **简介**
 
-压力测试考察当前软硬件环境下系统所能承受住的最大负荷并帮助找出系统的瓶颈所在，压测都是为了系统
+压力测试考察当前软硬件环境下系统所能承受住的最大负荷并帮助找出系统的瓶颈所在，压测都是为了系统。
 
-在线上的处理能力和稳定性维持在一个标准范围内，做到心中有数
+在线上的处理能力和稳定性维持在一个标准范围内，做到心中有数。
 
 使用压力测试，我们有希望找到很多种用其他测试方法更难发现的错误，有两种错误类型是：
 
-内存泄漏、并发与同步
+内存泄漏、并发与同步。
 
-有效的压力测试系统将应用以下这些关键条件：重复、并发、量级、随机变化
+有些服务在单线程工作模式下没问题，但一出现并发请求。就会出现各种错误，这些错误是我们在做功能测试时很难发现的。
+
+> 有效的压力测试系统将应用以下这些关键条件：重复、并发、量级、随机变化
+
+* jvisualvm
+
+  用于检测java应用资源占用和垃圾回收的情况，cmd输入jvisualvm即可打开
+
+* Jmeter
+
+  下载后bin目录`jmeter.bat`打开
+
+* 测试环境
+
+  系统win10，CPU I710710U，内存16G
+
+
+
+
+
+### 3. 三级分类(优化业务)
+
+**优化前**
+
+对二级菜单的每次遍历都需要查询数据库，浪费大量资源
+
+```java
+ //查询数据库：二级菜单
+List<CategoryEntity> categoryEntities = this.list(new QueryWrapper<CategoryEntity>().eq("cat_level", 2));
+
+        List<Catalog2Vo> catalog2Vos = categoryEntities.stream().map(categoryEntity -> {
+            //查询数据库：三级菜单
+            List<CategoryEntity> level3 = this.list(new QueryWrapper<CategoryEntity>().eq("parent_cid", categoryEntity.getCatId()));
+            List<Catalog2Vo.Catalog3Vo> catalog3Vos = level3.stream().map(cat -> {
+                return new Catalog2Vo.Catalog3Vo(cat.getParentCid().toString(), cat.getCatId().toString(), cat.getName());
+            }).collect(Collectors.toList());
+            Catalog2Vo catalog2Vo = new Catalog2Vo(categoryEntity.getParentCid().toString(), categoryEntity.getCatId().toString(), categoryEntity.getName(), catalog3Vos);
+            return catalog2Vo;
+        }).collect(Collectors.toList());
+        Map<String, List<Catalog2Vo>> catalogMap = new HashMap<>();
+        for (Catalog2Vo catalog2Vo : catalog2Vos) {
+            List<Catalog2Vo> list = catalogMap.getOrDefault(catalog2Vo.getCatalog1Id(), new LinkedList<>());
+            list.add(catalog2Vo);
+            catalogMap.put(catalog2Vo.getCatalog1Id(),list);
+        }
+        return catalogMap;
+```
+
+**优化后**
+
+仅查询一次数据库，剩下的数据通过遍历得到并封装
+
+```java
+  //优化业务逻辑，仅查询一次数据库
+        List<CategoryEntity> categoryEntities = this.list();
+        //查出所有一级分类
+        List<CategoryEntity> level1Categories = getCategoryByParentCid(categoryEntities, 0L);
+        Map<String, List<Catalog2Vo>> listMap = level1Categories.stream().collect(Collectors.toMap(k->k.getCatId().toString(), v -> {
+            //遍历查找出二级分类
+            List<CategoryEntity> level2Categories = getCategoryByParentCid(categoryEntities, v.getCatId());
+            List<Catalog2Vo> catalog2Vos=null;
+            if (level2Categories!=null){
+                //封装二级分类到vo并且查出其中的三级分类
+                catalog2Vos = level2Categories.stream().map(cat -> {
+                    //遍历查出三级分类并封装
+                    List<CategoryEntity> level3Catagories = getCategoryByParentCid(categoryEntities, cat.getCatId());
+                    List<Catalog2Vo.Catalog3Vo> catalog3Vos = null;
+                    if (level3Catagories != null) {
+                        catalog3Vos = level3Catagories.stream()
+                                .map(level3 -> new Catalog2Vo.Catalog3Vo(level3.getParentCid().toString(), level3.getCatId().toString(), level3.getName()))
+                                .collect(Collectors.toList());
+                    }
+                    Catalog2Vo catalog2Vo = new Catalog2Vo(v.getCatId().toString(), cat.getCatId().toString(), cat.getName(), catalog3Vos);
+                    return catalog2Vo;
+                }).collect(Collectors.toList());
+            }
+            return catalog2Vos;
+        }));
+        return listMap;
+```
+
+### 4. Nginx动静分类
 
 ### 5.1 性能指标
 
@@ -4967,9 +5251,9 @@ http {
 
 ![image-20201029114153244](image-20201029114153244.png)
 
-从 Java8 开始,HotSpot 已经完全将永久代（Permanent Generation）移除，取而代之的是一个新的区域 - 元空间（MetaSpac)
+从 Java8 开始,HotSpot 已经完全将永久代（Permanent Generation）移除，取而代之的是一个新的区域 - 元空间（MetaSpace)
 
-<img src="/image-20201029114652885.png" alt="image-20201029114652885"  />
+<img src="image-20201029114652885.png" alt="image-20201029114652885"  />
 
 
 
@@ -5025,6 +5309,8 @@ SQL 耗时越小越好、一般情况下微妙级别
 
 毫秒 
 
+注：简单业务仅返回一个字符串
+
 |                  压测内容                  | 压测线程数 | 吞吐量/ms              | 90%响应时间/ms | 99%响应时间/ms |
 | :----------------------------------------: | ---------- | ---------------------- | -------------- | -------------- |
 |                 **Nginx**                  | 50         | 1834                   | 11             | 40             |
@@ -5043,7 +5329,7 @@ SQL 耗时越小越好、一般情况下微妙级别
 
 中间件越多，性能损失越大，大多都损失在了网络交互
 
-##### 2、数据库指标
+##### 2、性能指标
 
 - **响应时间**（Response Time:RT）
 - 响应时间指用户从客户端发起一个请求开始，到客户端接收到服务器端返回的响应结束，整个过程所耗费的时间
@@ -5167,15 +5453,78 @@ return data;
 
 
 
+### 6.1.2 本地缓存
+
+#### 
+
+<img src="/Snipaste_2020-09-06_23-44-20.png" style="zoom:33%;" />
+
+#### 1)  使用hashmap本地缓存
+
+```java
+    //测试本地缓存，通过hashmap
+    private Map<String,Object> cache=new HashMap<>();
+
+    public Map<String, List<Catalog2Vo>> getCategoryMap() {
+          Map<String, List<Catalog2Vo>> catalogMap = (Map<String, List<Catalog2Vo>>) cache.get("catalogMap");
+        //如果没有缓存，则从数据库中查询并放入缓存中
+        if (catalogMap == null) {
+            catalogMap = getCategoriesDb();
+            cache.put("catalogMap",catalogMap);
+        }
+        return catalogMap;
+    }
+```
+
+#### 1) 本地缓存面临问题
+
+当有多个服务存在时，每个服务的缓存仅能够为本服务使用，这样每个服务都要查询一次数据库，并且当数据更新时只会更新单个服务的缓存数据，就会造成数据不一致的问题
+
+![](/Snipaste_2020-09-06_23-54-28-1623061147164.png)
+
+所有的服务都到同一个redis进行获取数据，就可以避免这个问题
+
+![](/Snipaste_2020-09-07_18-03-17-1623061147165.png)
+
+#### 
+
+#### 
+
 #### 6.1.3 整合 redis 作为缓存
 
 ##### 1、引入依赖
 
-SpringBoot 整合 redis，查看SpringBoot提供的 starts
+SpringBoot 整合 redis，查看SpringBoot提供的 starter
 
 ![image-20201031154148722](image-20201031154148722.png)
 
 官网：https://docs.spring.io/spring-boot/docs/2.1.18.RELEASE/reference/html/using-boot-build-systems.html#using-boot-starter
+
+**内存泄漏及解决办法**
+
+当进行压力测试时后期后出现堆外内存溢出OutOfDirectMemoryError
+
+产生原因：
+
+1)、springboot2.0以后默认使用lettuce操作redis的客户端，它使用通信
+
+2)、lettuce的bug导致netty堆外内存溢出
+
+/**
+ * TODO 产生堆外内存溢出 OutOfDirectMemoryError
+ * 1、SpringBoot2.0以后默认使用 Lettuce作为操作redis的客户端，它使用 netty进行网络通信
+ * 2、lettuce 的bug导致netty堆外内存溢出，-Xmx300m netty 如果没有指定堆内存移除，默认使用 -Xmx300m
+ *      可以通过-Dio.netty.maxDirectMemory 进行设置
+ *   解决方案 不能使用 -Dio.netty.maxDirectMemory调大内存
+ *   1、升级 lettuce客户端，2、 切换使用jedis
+ *   redisTemplate:
+ *   lettuce、jedis 操作redis的底层客户端，Spring再次封装
+ * @return
+ */
+
+解决方案：由于是lettuce的bug造成，不能直接使用-Dio.netty.maxDirectMemory去调大虚拟机堆外内存
+
+1)、升级lettuce客户端。   2）、切换使用jedis
 
 pom.xml
 
@@ -5199,6 +5548,8 @@ pom.xml
             <artifactId>jedis</artifactId>
         </dependency>
 ```
+
+
 
 ##### 2、配置
 
@@ -5230,46 +5581,34 @@ public void testStringRedisTemplate() {
 }
 ```
 
-##### 4、优化三级分类数据获取
+#### 3) 高并发下缓存失效问题
 
-```java
-/**
- * TODO 产生堆外内存溢出 OutOfDirectMemoryError
- * 1、SpringBoot2.0以后默认使用 Lettuce作为操作redis的客户端，它使用 netty进行网络通信
- * 2、lettuce 的bug导致netty堆外内存溢出，-Xmx300m netty 如果没有指定堆内存移除，默认使用 -Xmx300m
- *      可以通过-Dio.netty.maxDirectMemory 进行设置
- *   解决方案 不能使用 -Dio.netty.maxDirectMemory调大内存
- *   1、升级 lettuce客户端，2、 切换使用jedis
- *   redisTemplate:
- *   lettuce、jedis 操作redis的底层客户端，Spring再次封装
- * @return
- */
-@Override
-public Map<String, List<Catelog2Vo>> getCatelogJson() {
+**缓存穿透**
 
-    // 给缓存中放 json 字符串、拿出的是 json 字符串，还要逆转为能用的对象类型【序列化和反序列化】
+指查询一个一定不存在的数据，由于缓存是不命中，将去查询数据库，但是数据库也无此记录，我们没有将这次查询的null写入缓存，这将导致这个不存在的数据每次请求都要到存储层去查询，失去了缓存的意义
 
-    // 1、加入缓存逻辑，缓存中放的数据是 json 字符串
-    // JSON 跨语言，跨平台兼容
-    String catelogJSON = redisTemplate.opsForValue().get("catelogJSON");
-    if (StringUtils.isEmpty(catelogJSON)) {
-        // 2、缓存没有，从数据库中查询
-        Map<String, List<Catelog2Vo>> catelogJsonFromDb = getCatelogJsonFromDb();
-        // 3、查询到数据，将数据转成 JSON 后放入缓存中
-        String s = JSON.toJSONString(catelogJsonFromDb);
-        redisTemplate.opsForValue().set("catelogJSON",s);
-        return catelogJsonFromDb;
-    }
-    // 转换为我们指定的对象
-    Map<String, List<Catelog2Vo>> result = JSON.parseObject(catelogJSON, new TypeReference<Map<String, List<Catelog2Vo>>>() {});
+风险：
+利用不存在的数据进行攻击，数据库瞬时压力增大，最终导致崩溃
 
-    return result;
-}
-```
+解决：
+null结果缓存，并加入短暂过期时间
 
+**缓存雪崩**
 
+缓存雪崩是指在我们设置缓存时key采用了相同的过期时间，导致缓存在某一时刻同时失效，请求全部转发到DB，DB瞬时
+压力过重雪崩。
 
-### 6.2 缓存失效
+解决：
+原有的失效时间基础上增加一个随机值，比如1-5分钟随机，这样每一个缓存的过期时间的重复率就会降低，就很难引发集体失效的事件。
+
+**缓存击穿**
+
+* 对于一些设置了过期时间的key，如果这些key可能会在某些时间点被超高并发地访问，是一种非常“热点”的数据。
+
+* 如果这个key在大量请求同时进来前正好失效，那么所有对这个key的数据查询都落到db，我们称为缓存击穿。
+
+解决：
+加锁。大量并发只让一个去查，其他人等待，查到以后释放锁，其他人获取到锁，先查缓存，就会有数据，不用去db
 
 #### 高并发下缓存失效问题 
 
@@ -5285,13 +5624,95 @@ public Map<String, List<Catelog2Vo>> getCatelogJson() {
 
 ![image-20201031164021131](image-20201031164021131.png)
 
-##### 分布式下如何加锁
+#### 4) 加锁解决缓存击穿问题 阶段一
 
-![image-20201031112235353](image-20201031112235353.png)
+将查询db的方法加锁，这样在同一时间只有一个方法能查询数据库，就能解决缓存击穿的问题了
+
+```java
+public Map<String, List<Catalog2Vo>> getCategoryMap() {
+    // 给缓存中放 json 字符串、拿出的是 json 字符串，还要逆转为能用的对象类型【序列化和反序列化】
+
+    // 1、加入缓存逻辑，缓存中放的数据是 json 字符串
+    // JSON 跨语言，跨平台兼容
+        ValueOperations<String, String> ops = stringRedisTemplate.opsForValue();
+        String catalogJson = ops.get("catalogJson");
+        if (StringUtils.isEmpty(catalogJson)) {
+            // 2、缓存没有，从数据库中查询
+            System.out.println("缓存不命中，准备查询数据库。。。");
+            Map<String, List<Catalog2Vo>> categoriesDb = getCategoriesDb();
+            // 3、查询到数据，将数据转成 JSON 后放入缓存中
+            String toJSONString = JSON.toJSONString(categoriesDb);
+            ops.set("catalogJson",toJSONString);
+            return categoriesDb;
+        }
+        System.out.println("缓存命中。。。。");
+        Map<String, List<Catalog2Vo>> listMap = JSON.parseObject(catalogJson, new TypeReference<Map<String, List<Catalog2Vo>>>() {});
+        return listMap;
+    }
+
+ private synchronized Map<String, List<Catalog2Vo>> getCategoriesDb() {
+        String catalogJson = stringRedisTemplate.opsForValue().get("catalogJson");
+        if (StringUtils.isEmpty(catalogJson)) {
+            System.out.println("查询了数据库");
+      		。。。。。
+            return listMap;
+        }else {
+            Map<String, List<Catalog2Vo>> listMap = JSON.parseObject(catalogJson, new TypeReference<Map<String, List<Catalog2Vo>>>() {});
+            return listMap;
+        }
+    }
+```
+
+#### 5)  锁时序问题
+
+在上述方法中，我们将业务逻辑中的`确认缓存没有`和`查数据库`放到了锁里，但是最终控制台却打印了两次查询了数据库。这是因为在释放锁后，将结果放入缓存的这段时间（可能因为网络波动等原因变长）里，有其他线程拿到锁确认缓存没有，又再次查询了数据库，因此我们要将`结果放入缓存`也进行加锁。
+
+> 在这里，将数据放入redis，就是影响双重检查锁判断的数据状态的操作。不把更新双重检查锁数据状态的代码，放入同步代码，就会导致锁失效。
+>
+> 这提示我们，过早释放锁（尤其是没有更新双重检查锁使用的数据状态），很可能导致锁失效，导致多个线程重复执行业务代码。
+
+<img src="/Snipaste_2020-09-07_17-23-41.png" style="zoom:38%;" />
+
+优化代码逻辑后
+
+```java
+public Map<String, List<Catalog2Vo>> getCategoryMap() {
+    ValueOperations<String, String> ops = stringRedisTemplate.opsForValue();
+        String catalogJson = ops.get("catalogJson");
+        if (StringUtils.isEmpty(catalogJson)) {
+            System.out.println("缓存不命中，准备查询数据库。。。");
+            synchronized (this) {
+                String synCatalogJson = stringRedisTemplate.opsForValue().get("catalogJson");
+                if (StringUtils.isEmpty(synCatalogJson)) {
+                    Map<String, List<Catalog2Vo>> categoriesDb= getCategoriesDb();
+                    String toJSONString = JSON.toJSONString(categoriesDb);
+                    ops.set("catalogJson", toJSONString);
+                    return categoriesDb;
+                }else {
+                    Map<String, List<Catalog2Vo>> listMap = JSON.parseObject(synCatalogJson, new TypeReference<Map<String, List<Catalog2Vo>>>() {});
+                    return listMap;
+                }
+            }
+        }
+        System.out.println("缓存命中。。。。");
+        Map<String, List<Catalog2Vo>> listMap = JSON.parseObject(catalogJson, new TypeReference<Map<String, List<Catalog2Vo>>>() {});
+        return listMap;
+}
+```
+
+优化后多线程访问时仅查询一次数据库
+
+
 
 
 
 ### 6.4 分布式锁
+
+##### 分布式锁
+
+当分布式项目在高并发下也需要加锁，但本地锁只能锁住当前服务，这个时候就需要分布式锁
+
+![image-20201031112235353](image-20201031112235353.png)
 
 #### 分布式锁原理与应用
 
@@ -5301,143 +5722,202 @@ public Map<String, List<Catelog2Vo>> getCatelogJson() {
 
 **理解：**就先当1000个人去占一个厕所，厕所只能有一个人占到这个坑，占到这个坑其他人就只能在外面等待，等待一段时间后可以再次来占坑，业务执行后，释放锁，那么其他人就可以来占这个坑
 
+**阶段一**
 
-
-##### 分布式锁演进 - 阶段一
-
-![image-20201031123441336](image-20201031123441336.png)
-
-**代码：**
+<img src="/Snipaste_2020-09-08_18-51-36.png" style="zoom: 33%;" />
 
 ```java
- Boolean lock = redisTemplate.opsForValue().setIfAbsent("lock", "0");
+	public Map<String, List<Catalog2Vo>> getCatalogJsonDbWithRedisLock() {
+        //阶段一
+        Boolean lock = stringRedisTemplate.opsForValue().setIfAbsent("lock", "111");
+        //获取到锁，执行业务
         if (lock) {
-            // 加锁成功..执行业务
-            Map<String,List<Catelog2Vo>> dataFromDb = getDataFromDB();
-            redisTemplate.delete("lock"); // 删除锁
-            return dataFromDb;
-        } else {
-            // 加锁失败，重试 synchronized()
-            // 休眠100ms重试
-            return getCatelogJsonFromDbWithRedisLock();
+            Map<String, List<Catalog2Vo>> categoriesDb = getCategoryMap();
+            //删除锁，如果在此之前报错或宕机会造成死锁
+            stringRedisTemplate.delete("lock");
+            return categoriesDb;
+        }else {
+            //没获取到锁，等待100ms重试
+            try {
+                Thread.sleep(100);
+            } catch (InterruptedException e) {
+                e.printStackTrace();
+            }
+            return getCatalogJsonDbWithRedisLock();
         }
+    }
+
+public Map<String, List<Catalog2Vo>> getCategoryMap() {
+        ValueOperations<String, String> ops = stringRedisTemplate.opsForValue();
+        String catalogJson = ops.get("catalogJson");
+        if (StringUtils.isEmpty(catalogJson)) {
+            System.out.println("缓存不命中，准备查询数据库。。。");
+            Map<String, List<Catalog2Vo>> categoriesDb= getCategoriesDb();
+            String toJSONString = JSON.toJSONString(categoriesDb);
+            ops.set("catalogJson", toJSONString);
+            return categoriesDb;
+        }
+        System.out.println("缓存命中。。。。");
+        Map<String, List<Catalog2Vo>> listMap = JSON.parseObject(catalogJson, new TypeReference<Map<String, List<Catalog2Vo>>>() {});
+        return listMap;
+    }
 ```
 
-##### 分布式锁演进 - 阶段二
+问题：
+1、setnx占好了位，业务代码异常或者程序在页面过程中宕机。没有执行删除锁逻辑，这就造成了死锁
 
-![image-20201031123640746](image-20201031123640746.png)
+解决：设置锁的自动过期，即使没有删除，会自动删除
 
-**代码：**
+> 如果死锁，等待线程就会递归调用的不断重试，函数栈帧持续累计，无法释放，就会导致OOM
+
+
+
+**阶段二**
+
+<img src="Snipaste_2020-09-08_18-56-06.png" style="zoom:33%;" />
 
 ```java
- Boolean lock = redisTemplate.opsForValue().setIfAbsent()
+   public Map<String, List<Catalog2Vo>> getCatalogJsonDbWithRedisLock() {
+        Boolean lock = stringRedisTemplate.opsForValue().setIfAbsent("lock", "111");
         if (lock) {
             // 加锁成功..执行业务
             // 设置过期时间
-            redisTemplate.expire("lock",30,TimeUnit.SECONDS);
-            Map<String,List<Catelog2Vo>> dataFromDb = getDataFromDB();
-            redisTemplate.delete("lock"); // 删除锁
-            return dataFromDb;
-        } else {
+            stringRedisTemplate.expire("lock", 30, TimeUnit.SECONDS);
+            Map<String, List<Catalog2Vo>> categoriesDb = getCategoryMap();
+            stringRedisTemplate.delete("lock");
+            return categoriesDb;
+        }else {
             // 加锁失败，重试 synchronized()
             // 休眠100ms重试
-            return getCatelogJsonFromDbWithRedisLock();
+            try {
+                Thread.sleep(100);
+            } catch (InterruptedException e) {
+                e.printStackTrace();
+            }
+            return getCatalogJsonDbWithRedisLock();
         }
-
+    }
 ```
+
+问题：
+1、setnx设置好，正要去设置过期时间，宕机。又死锁了。
+解决：
+设置过期时间和占位必须是原子的。redis支持使用setnx ex命令
+
+
 
 ##### 分布式锁演进 - 阶段三
 
-![image-20201031124210112](image-20201031124210112.png)
-
-**代码：**
+<img src="/Snipaste_2020-09-08_19-03-23.png" style="zoom:33%;" />
 
 ```java
-// 设置值同时设置过期时间
-Boolean lock = redisTemplate.opsForValue().setIfAbsent("lock","111",300,TimeUnit.SECONDS);
-if (lock) {
-    // 加锁成功..执行业务
-    // 设置过期时间,必须和加锁是同步的，原子的
-    redisTemplate.expire("lock",30,TimeUnit.SECONDS);
-    Map<String,List<Catelog2Vo>> dataFromDb = getDataFromDB();
-    redisTemplate.delete("lock"); // 删除锁
-    return dataFromDb;
-} else {
-    // 加锁失败，重试 synchronized()
-    // 休眠100ms重试
-    return getCatelogJsonFromDbWithRedisLock();
+public Map<String, List<Catalog2Vo>> getCatalogJsonDbWithRedisLock() {
+    //加锁的同时设置过期时间，二者是原子性操作
+    Boolean lock = stringRedisTemplate.opsForValue().setIfAbsent("lock", "1111",5, TimeUnit.SECONDS);
+    if (lock) {
+        // 加锁成功..执行业务
+        Map<String, List<Catalog2Vo>> categoriesDb = getCategoryMap();
+        //模拟超长的业务执行时间
+        try {
+            Thread.sleep(6000);
+        } catch (InterruptedException e) {
+            e.printStackTrace();
+        }
+        //删除锁
+        stringRedisTemplate.delete("lock");
+        return categoriesDb;
+    }else {
+      // 休眠100ms重试
+        try {
+            Thread.sleep(100);
+        } catch (InterruptedException e) {
+            e.printStackTrace();
+        }
+        return getCatalogJsonDbWithRedisLock();
+    }
 }
 ```
 
+问题：
+1、删除锁直接删除？？？
+如果由于业务时间很长，锁自己过期了，我们直接删除，有可能把别人正在持有的锁删除了。
+解决：
+占锁的时候，值指定为uuid，每个人匹配是自己的锁才删除。
+
 ##### 分布式锁演进 - 阶段四
 
-![image-20201031124615670](image-20201031124615670.png)
+<img src="/Snipaste_2020-09-08_19-20-43.png" style="zoom: 33%;" />
 
-图解：
+图解：校验锁后，去删除锁时，锁恰好自己已过期，可能会删掉其他线程的锁
 
 ![image-20201031130547173](image-20201031130547173.png)
 
-代码：
+
 
 ```java
- String uuid = UUID.randomUUID().toString();
-        // 设置值同时设置过期时间
-        Boolean lock = redisTemplate.opsForValue().setIfAbsent("lock",uuid,300,TimeUnit.SECONDS);
+ public Map<String, List<Catalog2Vo>> getCatalogJsonDbWithRedisLock() {
+        String uuid = UUID.randomUUID().toString();
+        ValueOperations<String, String> ops = stringRedisTemplate.opsForValue();
+     	//为当前锁设置唯一的uuid，只有当uuid相同时才会进行删除锁的操作
+        Boolean lock = ops.setIfAbsent("lock", uuid,5, TimeUnit.SECONDS);
         if (lock) {
-            // 加锁成功..执行业务
-            // 设置过期时间,必须和加锁是同步的，原子的
-//            redisTemplate.expire("lock",30,TimeUnit.SECONDS);
-            Map<String,List<Catelog2Vo>> dataFromDb = getDataFromDB();
-//            String lockValue = redisTemplate.opsForValue().get("lock");
-//            if (lockValue.equals(uuid)) {
-//                // 删除我自己的锁
-//                redisTemplate.delete("lock"); // 删除锁
-//            }
-// 通过使用lua脚本进行原子性删除
-            String script = "if redis.call('get',KEYS[1]) == ARGV[1] then return redis.call('del',KEYS[1]) else return 0 end";
-                //删除锁
-                Long lock1 = redisTemplate.execute(new DefaultRedisScript<Long>(script, Long.class), Arrays.asList("lock"), uuid);
-
-            return dataFromDb;
-        } else {
-            // 加锁失败，重试 synchronized()
+            Map<String, List<Catalog2Vo>> categoriesDb = getCategoryMap();
+            String lockValue = ops.get("lock");
+            if (lockValue.equals(uuid)) {
+                //模拟校验锁后，去删除锁时，锁恰好自己已过期，可能会删掉其他线程的锁
+                //try {
+                //    Thread.sleep(6000);
+                //} catch (InterruptedException e) {
+                //    e.printStackTrace();
+                //}
+                // 删除我自己的锁
+                stringRedisTemplate.delete("lock");
+            }
+            return categoriesDb;
+        }else {
             // 休眠100ms重试
-            return getCatelogJsonFromDbWithRedisLock();
+            try {
+                Thread.sleep(100);
+            } catch (InterruptedException e) {
+                e.printStackTrace();
+            }
+            return getCatalogJsonDbWithRedisLock();
         }
-
+    }
 ```
 
-##### 分布式锁演进 - 阶段五 最终模式
+问题：
+1、如果正好判断是当前值，正要删除锁的时候，锁已经过期，别人已经设置到了新的值。那么我们删除的是别人的锁
+解决：
+删除锁必须保证原子性。使用redis+Lua脚本完成
 
-![image-20201031130201609](image-20201031130201609.png)
+
+##### 分布式锁演进 - 阶段五 最终形态
+
+
+
+<img src="Snipaste_2020-09-08_19-35-01.png" style="zoom:33%;" />
 
 代码：
 
 ```java
  String uuid = UUID.randomUUID().toString();
-        // 设置值同时设置过期时间
-        Boolean lock = redisTemplate.opsForValue().setIfAbsent("lock",uuid,300,TimeUnit.SECONDS);
+        // 加锁+设置过期时间=原子操作。必须是同步的。
+        Boolean lock=redisTemplate.opsForValue().setIfAbsent("lock",uuid,300,TimeUnit.SECONDS);
         if (lock) {
             System.out.println("获取分布式锁成功");
             // 加锁成功..执行业务
-            // 设置过期时间,必须和加锁是同步的，原子的
-//            redisTemplate.expire("lock",30,TimeUnit.SECONDS);
             Map<String,List<Catelog2Vo>> dataFromDb;
-//            String lockValue = redisTemplate.opsForValue().get("lock");
-//            if (lockValue.equals(uuid)) {
-//                // 删除我自己的锁
-//                redisTemplate.delete("lock"); // 删除锁
-//            }
             try {
                 dataFromDb = getDataFromDB();
             } finally {
+                // 获取值对比+对比成功删除=原子操作 lua脚本解锁
                 String script = "if redis.call('get',KEYS[1]) == ARGV[1] then return redis.call('del',KEYS[1]) else return 0 end";
                 //删除锁
                 Long lock1 = redisTemplate.execute(new DefaultRedisScript<Long>(script, Long.class), Arrays.asList("lock"), uuid);
             }
             return dataFromDb;
         } else {
-            // 加锁失败，重试 synchronized()
             // 休眠200ms重试
             System.out.println("获取分布式锁失败，等待重试");
             try { TimeUnit.MILLISECONDS.sleep(200); } catch (InterruptedException e) { e.printStackTrace(); }
@@ -5445,16 +5925,21 @@ if (lock) {
         }
 ```
 
+总结：
 
+1. 两个核心操作，原子加锁，原子解锁。通过上面的代码，保证加锁【占位+过期时间】和删除锁【判断+删除】操作的原子性。
+
+2. 更难的事情，锁的自动续期
 
 问题：
 
-- 分布式加锁解锁都是这两套代码，可以封装成工具类
-- 分布式锁有更专业的框架
+- 分布式加锁解锁都是这段代码，我们可以封装成工具类，在其他业务复用。
+- 分布式锁有更专业的框架Redisson。
+- 上面的递归调用阻塞方式容易出现OOM问题，为了方便演示OOM。把递归前的sleep去掉，用压测工具压这个服务接口。很容易出现OOM。
 
 
 
-#### 分布式锁 - Redisson
+#### 更专业的分布式锁实现框架 - Redisson
 
 ##### 1、简介&整合
 
@@ -5487,7 +5972,11 @@ Pom
 </dependency>
 ```
 
-##### 2、Redisson - Lock 锁测试 & Redisson - Lock 看门狗原理 - Redisson 如何解决死锁
+##### 2、 Redisson 如何解决死锁
+
+1. 通过自动设置默认过期时间，避免意外宕机等情况导致死锁
+
+2. 如果业务执行时间长，通过自动续期，避免锁自动过期后。（看门狗）
 
 ```java
 @RequestMapping("/hello")
@@ -5498,18 +5987,18 @@ public String hello(){
 
     // 2、加锁
     lock.lock(); // 阻塞式等待，默认加的锁都是30s时间
-    // 1、锁的自动续期，如果业务超长，运行期间自动给锁续上新的30s，不用担心业务时间长，锁自动过期后被删掉
+    // 1、锁的自动续期（看门狗），如果业务超长，运行期间自动给锁续上新的30s，不用担心业务时间长，锁自动过期后被删掉
     // 2、加锁的业务只要运行完成，就不会给当前锁续期，即使不手动解锁，锁默认会在30s以后自动删除
 
     lock.lock(10, TimeUnit.SECONDS); //10s 后自动删除
     //问题 lock.lock(10, TimeUnit.SECONDS) 在锁时间到了后，不会自动续期
     // 1、如果我们传递了锁的超时时间，就发送给 redis 执行脚本，进行占锁，默认超时就是我们指定的时间
-    // 2、如果我们为指定锁的超时时间，就是用 30 * 1000 LockWatchchdogTimeout看门狗的默认时间、
+    // 2、如果我们未指定锁的超时时间，就是用 30 * 1000（LockWatchchdogTimeout看门狗的默认时间）、
     //      只要占锁成功，就会启动一个定时任务，【重新给锁设置过期时间，新的过期时间就是看门狗的默认时间】,每隔10s就自动续期
-    //      internalLockLeaseTime【看门狗时间】 /3,10s
+    //      internalLockLeaseTime【看门狗时间】/3,10s
 
     //最佳实践
-    // 1、lock.lock(10, TimeUnit.SECONDS);省掉了整个续期操作，手动解锁
+    // 1、lock.lock(30, TimeUnit.SECONDS);省掉了整个续期操作，手动解锁
 
     try {
         System.out.println("加锁成功，执行业务..." + Thread.currentThread().getId());
@@ -5534,7 +6023,7 @@ public String hello(){
 
 2、再次进入 `lock` 方法
 
-发现他调用了 tryAcquire
+发现他调用了 tryAcquire，而且是通过while true死循环实现自旋，不用担心OOM。
 
 ![image-20201101051925487](image-20201101051925487.png)
 
@@ -5544,7 +6033,7 @@ public String hello(){
 
 4、里头调用了 tryAcquireAsync
 
-这里判断 laseTime != -1 就与刚刚的第一步传入的值有关系
+这里就是看门狗，所以看门狗也是在while 死循环里面持续判断的。这里判断 laseTime != -1 就与刚刚的第一步传入的值有关系
 
 ![image-20201101052037959](image-20201101052037959.png)
 
@@ -5566,7 +6055,39 @@ public String hello(){
 
 ![image-20201101052428198](image-20201101052428198.png)
 
+8、自动续期是通过一个定时器实现的。
 
+一个方法在定时器里的回调里，重新调用自己。
+
+![image-20210608205950098](/image-20210608205950098.png)
+
+![image-20210608205454637](/image-20210608205454637.png)
+
+> 总结：专业框架相对于我们自己实现的锁的几点不同
+>
+> 1. 避免死锁的方式，通过设置过期时间和自动续期
+> 2. 阻塞等待获取锁的时候，是用while死循环方式实现自旋。不用担心递归调用带来的OOM风险。
+> 3. 实现的都是可重入锁。避免两个要求锁的函数，在嵌套调用时出现死锁问题。
+
+> 思考：当时引入锁是防止缓存击穿问题，如果出现大量请求在请求等待锁，是不是也会导致机器资源耗尽？
+>
+> 如果真的出现这样大量请求，不引入锁，服务器压力更大，每个请求去请求数据库，处理时间都变长。都去访问数据库，还会直接压垮数据库。
+>
+> 毕竟只要服务器可以“接住”这些请求，坚持到缓存里有数据，积压的请求很快就处理掉了。
+>
+> 业务服务器引入锁机制，保护限制对数据库的访问。
+
+##### 最佳实战：
+
+lock.lock(30, TimeUnit.SECONDS);
+
+虽然默认的lock()方法有自动续期。
+
+但我们还是推荐使用指定过期时间的方法，手动解锁。这样我们控制过期时间，而且省掉了整个续期操作，如果锁过期了，业务还没执行完，说明业务有问题了（数据库宕掉了等）。
+
+> 如果线程A的锁过期时间设置的太短，业务完成前过期了，线程B拿到了锁。然后线程A业务完成后去解锁，会抛异常。因为锁里记录了是哪个线程创建的，只允许创建它的线程删除。
+
+![image-20210608211510995](/image-20210608211510995.png)
 
 ##### 3、Reidsson - 读写锁
 
