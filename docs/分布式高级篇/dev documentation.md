@@ -1,3 +1,4 @@
+
 ---
 
 typora-root-url: images
@@ -5971,11 +5972,34 @@ Pom
     <version>3.12.0</version>
 </dependency>
 ```
+开启配置https://github.com/redisson/redisson/wiki/2.-%E9%85%8D%E7%BD%AE%E6%96%B9%E6%B3%95
 
-##### 2、 Redisson 如何解决死锁
+```java
+@Configuration
+public class MyRedisConfig {
+
+    @Value("${ipAddr}")
+    private String ipAddr;
+
+    // redission通过redissonClient对象使用 // 如果是多个redis集群，可以配置
+    @Bean(destroyMethod = "shutdown")
+    public RedissonClient redisson() {
+        Config config = new Config();
+        // 创建单例模式的配置
+        config.useSingleServer().setAddress("redis://" + ipAddr + ":6379");
+        return Redisson.create(config);
+    }
+}
+
+```
+
+
+
+##### 2、 可重入锁
+
+避免死锁
 
 1. 通过自动设置默认过期时间，避免意外宕机等情况导致死锁
-
 2. 如果业务执行时间长，通过自动续期，避免锁自动过期后。（看门狗）
 
 ```java
@@ -6089,7 +6113,124 @@ lock.lock(30, TimeUnit.SECONDS);
 
 ![image-20210608211510995](/image-20210608211510995.png)
 
+##### (2) 可重入锁（Reentrant Lock）
+
+分布式锁：github.com/redisson/redisson/wiki/8.-分布式锁和同步器
+
+A调用B。AB都需要同一锁，此时可重入锁就可以重入，A就可以调用B。不可重入锁时，A调用B将死锁
+
+```java
+// 参数为锁名字
+RLock lock = redissonClient.getLock("CatalogJson-Lock");//该锁实现了JUC.locks.lock接口
+lock.lock();//阻塞等待
+// 解锁放到finally // 如果这里宕机：有看门狗，不用担心
+lock.unlock();
+
+```
+
+基于Redis的Redisson分布式可重入锁RLock Java对象实现了java.util.concurrent.locks.Lock接口。同时还提供了异步（Async）、反射式（Reactive）和RxJava2标准的接口。
+
+锁的续期：大家都知道，如果负责储存这个分布式锁的Redisson节点宕机以后，而且这个锁正好处于锁住的状态时，这个锁会出现锁死的状态。为了避免这种情况的发生，Redisson内部提供了一个监控锁的看门狗，它的作用是在Redisson实例被关闭前，不断的延长锁的有效期。默认情况下，看门狗的检查锁的超时时间是30秒钟（每到20s就会自动续借成30s，是1/3的关系），也可以通过修改Config.lockWatchdogTimeout来另行指定。
+
+```java
+// 加锁以后10秒钟自动解锁，看门狗不续命
+// 无需调用unlock方法手动解锁
+lock.lock(10, TimeUnit.SECONDS);
+
+// 尝试加锁，最多等待100秒，上锁以后10秒自动解锁
+boolean res = lock.tryLock(100, 10, TimeUnit.SECONDS);
+if (res) {
+   try {
+     ...
+   } finally {
+       lock.unlock();
+   }
+}
+如果传递了锁的超时时间，就执行脚本，进行占锁;
+如果没传递锁时间，使用看门狗的时间，占锁。如果返回占锁成功future，调用future.onComplete();
+没异常的话调用scheduleExpirationRenewal(threadId);
+重新设置过期时间，定时任务;
+看门狗的原理是定时任务：重新给锁设置过期时间，新的过期时间就是看门狗的默认时间;
+锁时间/3是定时任务周期;
+
+```
+
+Redisson同时还为分布式锁提供了异步执行的相关方法：
+
+```java
+RLock lock = redisson.getLock("anyLock");
+lock.lockAsync();
+lock.lockAsync(10, TimeUnit.SECONDS);
+Future<Boolean> res = lock.tryLockAsync(100, 10, TimeUnit.SECONDS);
+
+```
+
+RLock对象完全符合Java的Lock规范。也就是说只有拥有锁的进程才能解锁，其他进程解锁则会抛出IllegalMonitorStateException错误。但是如果遇到需要其他进程也能解锁的情况，请使用分布式信号量Semaphore 对象.
+
+```java
+public Map<String, List<Catalog2Vo>> getCatalogJsonDbWithRedisson() {
+    Map<String, List<Catalog2Vo>> categoryMap=null;
+    RLock lock = redissonClient.getLock("CatalogJson-Lock");
+    lock.lock();
+    try {
+        Thread.sleep(30000);
+        categoryMap = getCategoryMap();
+    } catch (InterruptedException e) {
+        e.printStackTrace();
+    }finally {
+        lock.unlock();
+        return categoryMap;
+    }
+}
+
+```
+
+最佳实战：自己指定锁时间，时间长点即可
+
+
 ##### 3、Reidsson - 读写锁
+
+基于Redis的Redisson分布式可重入读写锁RReadWriteLock Java对象实现了java.util.concurrent.locks.ReadWriteLock接口。其中读锁和写锁都继承了RLock接口。
+
+分布式可重入读写锁允许同时有多个读锁和一个写锁处于加锁状态。
+
+```java
+RReadWriteLock rwlock = redisson.getReadWriteLock("anyRWLock");
+// 最常见的使用方法
+rwlock.readLock().lock();
+// 或
+rwlock.writeLock().lock();
+
+```
+
+
+
+```java
+// 10秒钟以后自动解锁
+// 无需调用unlock方法手动解锁
+rwlock.readLock().lock(10, TimeUnit.SECONDS);
+// 或
+rwlock.writeLock().lock(10, TimeUnit.SECONDS);
+
+// 尝试加锁，最多等待100秒，上锁以后10秒自动解锁
+boolean res = rwlock.readLock().tryLock(100, 10, TimeUnit.SECONDS);
+// 或
+boolean res = rwlock.writeLock().tryLock(100, 10, TimeUnit.SECONDS);
+...
+lock.unlock();
+```
+
+上锁时在redis的状态
+
+HashWrite-Lock
+key:mode  value:read
+key:sasdsdffsdfsdf... value:1
+
+上锁时在redis的状态
+
+<img src="/Snipaste_2020-09-09_12-53-21.png" style="zoom: 50%;" />
+
+
 
 二话不说，上代码！！！
 
@@ -6149,45 +6290,42 @@ lock.lock(30, TimeUnit.SECONDS);
 
 ```
 
-来看下官网的解释
-
-![image-20201101053042268](image-20201101053042268.png)
-
 ##### 4、Redisson - 闭锁测试
 
-官网！！！
+基于Redisson的Redisson分布式闭锁（CountDownLatch）Java对象RCountDownLatch采用了与java.util.concurrent.CountDownLatch相似的接口和用法。
 
-![image-20201101053053554](image-20201101053053554.png)
-
-上代码
+以下代码只有offLatch()被调用5次后 setLatch()才能继续执行
 
 
 
 ```java
-/**
- * 放假锁门
- * 1班没人了
- * 5个班级走完，我们可以锁们了
- * @return
- */
-@GetMapping("/lockDoor")
-@ResponseBody
-public String lockDoor() throws InterruptedException {
-    RCountDownLatch door = redission.getCountDownLatch("door");
-    door.trySetCount(5);
-    door.await();//等待闭锁都完成
+ 	@GetMapping("/setLatch")
+    @ResponseBody
+    public String setLatch() {
+        RCountDownLatch latch = redissonClient.getCountDownLatch("CountDownLatch");
+        try {
+            latch.trySetCount(5);
+            latch.await();
+        } catch (InterruptedException e) {
+            e.printStackTrace();
+        }
+        return "门栓被放开";
+    }
 
-    return "放假了....";
-}
-@GetMapping("/gogogo/{id}")
-@ResponseBody
-public String gogogo(@PathVariable("id") Long id) {
-    RCountDownLatch door = redission.getCountDownLatch("door");
-    door.countDown();// 计数器减一
-
-    return id + "班的人走完了.....";
-}
+    @GetMapping("/offLatch")
+    @ResponseBody
+    public String offLatch() {
+        RCountDownLatch latch = redissonClient.getCountDownLatch("CountDownLatch");
+        latch.countDown();
+        return "门栓被放开1";
+    }
 ```
+
+闭锁在redis的存储状态
+
+<img src="/Snipaste_2020-09-09_13-11-45.png" style="zoom:50%;" />
+
+
 
 和 JUC 的 CountDownLatch 一致
 
@@ -6197,35 +6335,49 @@ countDown() 把计数器减掉后 await就会放行
 
 ##### 5、Redisson - 信号量测试
 
-官网！！！
+信号量为存储在redis中的一个数字，当这个数字大于0时，即可以调用acquire()方法增加数量，也可以调用release()方法减少数量，但是当调用release()之后小于0的话方法就会阻塞，直到数字大于0
 
-![image-20201101053450708](image-20201101053450708.png)
+基于Redis的Redisson的分布式信号量（Semaphore）Java对象RSemaphore采用了与java.util.concurrent.Semaphore相似的接口和用法。同时还提供了异步（Async）、反射式（Reactive）和RxJava2标准的接口。
+
+```java
+RSemaphore semaphore = redisson.getSemaphore("semaphore");
+semaphore.acquire();
+//或
+semaphore.acquireAsync();
+semaphore.acquire(23);
+semaphore.tryAcquire();
+//或
+semaphore.tryAcquireAsync();
+semaphore.tryAcquire(23, TimeUnit.SECONDS);
+//或
+semaphore.tryAcquireAsync(23, TimeUnit.SECONDS);
+semaphore.release(10);
+semaphore.release();
+//或
+semaphore.releaseAsync();
+```
 
 
 
 ```java
-/**
- * 车库停车
- * 3车位
- * @return
- */
 @GetMapping("/park")
 @ResponseBody
-public String park() throws InterruptedException {
-    RSemaphore park = redission.getSemaphore("park");
-    boolean b = park.tryAcquire();//获取一个信号，获取一个值，占用一个车位
-
-    return "ok=" + b;
+public String park() {
+    RSemaphore park = redissonClient.getSemaphore("park");
+    try {
+        park.acquire(2);
+    } catch (InterruptedException e) {
+        e.printStackTrace();
+    }
+    return "停进2";
 }
 
 @GetMapping("/go")
 @ResponseBody
 public String go() {
-    RSemaphore park = redission.getSemaphore("park");
-
-    park.release(); //释放一个车位
-
-    return "ok";
+    RSemaphore park = redissonClient.getSemaphore("park");
+    park.release(2);
+    return "开走2";
 }
 ```
 
@@ -6239,28 +6391,46 @@ public String go() {
 
 #### 缓存数据一致性 - 双写模式
 
-![image-20201101053613373](image-20201101053613373.png)
+当数据更新时，更新数据库时同时更新缓存
 
-两个线程写 最终只有一个线程写成功，后写成功的会把之前写的数据给覆盖，这就会造成脏数据
+<img src="/Snipaste_2020-09-10_18-29-41.png" style="zoom: 50%;" />
+
+**存在问题**
+
+由于卡顿等原因，导致写缓存2在最前，写缓存1在后面就出现了不一致
+
+![](C:/Users/wangliangliang/Downloads/gulimall-learning-master/docs/images/Snipaste_2020-09-10_18-31-38.png)
+
+这是暂时性的脏数据问题，但是在数据稳定，缓存过期以后，又能得到最新的正确数据
+
+
 
 #### 缓存数据一致性 - 失效模式
 
-![image-20201101053834126](image-20201101053834126.png)
+数据库更新时将缓存删除
 
-三个连接 
+<img src="/Snipaste_2020-09-10_18-33-47.png" style="zoom: 50%;" />
 
-一号连接 写数据库 然后删缓存
+**存在问题**
 
-二号连接 写数据库时网络连接慢，还没有写入成功
+当两个请求同时修改数据库，一个请求已经更新成功并删除缓存时又有读数据的请求进来，这时候发现缓存中无数据就去数据库中查询并**放入缓存，在放入缓存前第二个更新数据库的请求成功**，这时候留在缓存中的数据依然是第一次数据更新的数据
 
-三号链接 直接读取数据，读到的是一号连接写入的数据，此时 二号链接写入数据成功并删除了缓存，三号开始更新缓存发现更新的是二号的缓存
+<img src="/Snipaste_2020-09-10_18-34-56.png" style="zoom: 40%;" />
+
+**解决方法**
+
+1、缓存的所有数据都有过期时间，数据过期下一次查询触发主动更新
+2、读写数据的时候(并且写的不频繁)，加上分布式的读写锁。
+
+
 
 #### 缓存数据一致性解决方案
 
-无论是双写模式还是失效模式，都会到这缓存不一致的问题，即多个实力同时更新会出事，怎么办？
+无论是双写模式还是失效模式，都会到这缓存不一致的问题，即多个实例同时更新会出事，怎么办？
 
-- 1、如果是用户纯度数据（订单数据、用户数据），这并发几率很小，几乎不用考虑这个问题，缓存数据加上过期时间，每隔一段时间触发读的主动更新即可
+- 1、如果是用户维度数据（订单数据、用户数据），这并发几率很小，几乎不用考虑这个问题，缓存数据加上过期时间，每隔一段时间触发读的主动更新即可
 - 2、如果是菜单，商品介绍等基础数据，也可以去使用 canal 订阅，binlog 的方式
+- <img src="Snipaste_2020-09-10_20-06-15.png" style="zoom:80%;" />
 - 3、缓存数据 + 过期时间也足够解决大部分业务对缓存的要求
 - 4、通过加锁保证并发读写，写写的时候按照顺序排好队，读读无所谓，所以适合读写锁，（业务不关心脏数据，允许临时脏数据可忽略）
 
@@ -6268,24 +6438,20 @@ public String go() {
 
 - 我们能放入缓存的数据本来就不应该是实时性、一致性要求超高的。所以缓存数据的时候加上过期时间，保证每天拿到当前的最新值即可
 - 我们不应该过度设计，增加系统的复杂性
-- 遇到实时性、一致性要求高的数据，就应该查数据库，即使慢点
-
-
-
-![](D:\java\gitee\java-learning-note\Evan Guo\项目笔记\谷粒商城项目开发文档\分布式高级篇\image\image-20201101054937769.png)
-
-最后符上 三级分类数据 加上分布式锁
-
-
+- 遇到实时性、一致性要求高的数据，就应该查数据库，不走缓存,即使慢点
 
 ### 6.5 Spring Cache
+
+==这部分的理论内容可以[参考我之前学习springboot记的笔记](https://github.com/NiceSeason/SpringBoot_demo/tree/master/docs)，也是雷丰阳老师的课程，更加详细深入，包含源码分析。==
+
+每次都那样写缓存太麻烦了，spring从3.1开始定义了Cache、CacheManager接口来统一不同的缓存技术。并支持使用JCache(JSR-107)注解简化我们的开发
 
 #### 1、简介
 
 - Spring 从3.1开始定义了 `org.springframework.cache.Cache` 和 `org.sprngframework.cache.CacheManager` 接口睐统一不同的缓存技术
 - 并支持使用 `JCache`（JSR-107）注解简化我们的开发
 - Cache 接口为缓存的组件规范定义，包含缓存的各种操作集合 `Cache` 接口下 Spring 提供了各种 XXXCache的实现，如 `RedisCache`、`EhCache`,`ConcrrentMapCache`等等，
-- 每次调用需要缓存功能实现方法的时候，`Spring` 会检查检查指定参数的马努表犯法是否已经被嗲用过，如果有就直接从缓存中获取方法调用后的结果，如果没有就调用方法并缓存结果后返回给用户，下次直接调用从缓存中获取
+- 每次调用需要缓存功能实现方法的时候，`Spring` 会检查检查指定参数的目标方法是否已经被调用过，如果有就直接从缓存中获取方法调用后的结果，如果没有就调用方法并缓存结果后返回给用户，下次直接调用从缓存中获取
 - 使用 `Sprng` 缓存抽象时我们需要关注的点有以下两点
   - 1、确定方法需要被缓存以及他们的的缓存策略
   - 2、从缓存中读取之前缓存存储的数据
@@ -6321,7 +6487,154 @@ public String go() {
  */
 ```
 
+指定缓存类型并在主配置类上加上注解@EnableCaching
+
+```yaml
+spring:
+  cache:
+  	#指定缓存类型为redis
+    type: redis
+    redis:
+指定redis中的过期时间为1h
+      time-to-live: 3600000
+```
+
+
+默认使用jdk进行序列化（可读性差），默认ttl为-1永不过期，自定义序列化方式需要编写配置类
+
+
+​        
+
+```java
+@Configuration
+public class MyCacheConfig {
+    @Bean
+    public RedisCacheConfiguration redisCacheConfiguration( CacheProperties cacheProperties) {
+        
+        CacheProperties.Redis redisProperties = cacheProperties.getRedis();
+        org.springframework.data.redis.cache.RedisCacheConfiguration config = org.springframework.data.redis.cache.RedisCacheConfiguration
+            .defaultCacheConfig();
+        //指定缓存序列化方式为json
+        config = config.serializeValuesWith(
+            RedisSerializationContext.SerializationPair.fromSerializer(new GenericJackson2JsonRedisSerializer()));
+        //设置配置文件中的各项配置，如过期时间
+        if (redisProperties.getTimeToLive() != null) {
+            config = config.entryTtl(redisProperties.getTimeToLive());
+        }
+
+        if (redisProperties.getKeyPrefix() != null) {
+            config = config.prefixKeysWith(redisProperties.getKeyPrefix());
+        }
+        if (!redisProperties.isCacheNullValues()) {
+            config = config.disableCachingNullValues();
+        }
+        if (!redisProperties.isUseKeyPrefix()) {
+            config = config.disableKeyPrefix();
+        }
+        return config;
+    }
+}
+
+```
+
+2) 缓存自动配置
+
+```java
+// 缓存自动配置源码
+@Configuration(proxyBeanMethods = false)
+@ConditionalOnClass(CacheManager.class)
+@ConditionalOnBean(CacheAspectSupport.class)
+@ConditionalOnMissingBean(value = CacheManager.class, name = "cacheResolver")
+@EnableConfigurationProperties(CacheProperties.class)
+@AutoConfigureAfter({ CouchbaseAutoConfiguration.class, HazelcastAutoConfiguration.class,
+                     HibernateJpaAutoConfiguration.class, RedisAutoConfiguration.class })
+@Import({ CacheConfigurationImportSelector.class, // 看导入什么CacheConfiguration
+         CacheManagerEntityManagerFactoryDependsOnPostProcessor.class })
+public class CacheAutoConfiguration {
+
+    @Bean
+    @ConditionalOnMissingBean
+    public CacheManagerCustomizers cacheManagerCustomizers(ObjectProvider<CacheManagerCustomizer<?>> customizers) {
+        return new CacheManagerCustomizers(customizers.orderedStream().collect(Collectors.toList()));
+    }
+
+    @Bean
+    public CacheManagerValidator cacheAutoConfigurationValidator(CacheProperties cacheProperties,
+                                                                 ObjectProvider<CacheManager> cacheManager) {
+        return new CacheManagerValidator(cacheProperties, cacheManager);
+    }
+
+    @ConditionalOnClass(LocalContainerEntityManagerFactoryBean.class)
+    @ConditionalOnBean(AbstractEntityManagerFactoryBean.class)
+    static class CacheManagerEntityManagerFactoryDependsOnPostProcessor
+        extends EntityManagerFactoryDependsOnPostProcessor {
+
+        CacheManagerEntityManagerFactoryDependsOnPostProcessor() {
+            super("cacheManager");
+        }
+
+    }
+
+```
+
+
+
+```java
+@Configuration(proxyBeanMethods = false)
+@ConditionalOnClass(RedisConnectionFactory.class)
+@AutoConfigureAfter(RedisAutoConfiguration.class)
+@ConditionalOnBean(RedisConnectionFactory.class)
+@ConditionalOnMissingBean(CacheManager.class)
+@Conditional(CacheCondition.class)
+class RedisCacheConfiguration {
+
+    @Bean // 放入缓存管理器
+    RedisCacheManager cacheManager(CacheProperties cacheProperties, 
+                                   CacheManagerCustomizers cacheManagerCustomizers,
+                                   ObjectProvider<org.springframework.data.redis.cache.RedisCacheConfiguration> redisCacheConfiguration,
+                                   ObjectProvider<RedisCacheManagerBuilderCustomizer> redisCacheManagerBuilderCustomizers,
+                                   RedisConnectionFactory redisConnectionFactory, ResourceLoader resourceLoader) {
+        RedisCacheManagerBuilder builder = RedisCacheManager.builder(redisConnectionFactory).cacheDefaults(
+            determineConfiguration(cacheProperties, redisCacheConfiguration, resourceLoader.getClassLoader()));
+        List<String> cacheNames = cacheProperties.getCacheNames();
+        if (!cacheNames.isEmpty()) {
+            builder.initialCacheNames(new LinkedHashSet<>(cacheNames));
+        }
+        redisCacheManagerBuilderCustomizers.orderedStream().forEach((customizer) -> customizer.customize(builder));
+        return cacheManagerCustomizers.customize(builder.build());
+    }
+
+```
+
+
+
 #### 3、注解
+
+缓存使用@Cacheable@CacheEvict
+
+第一个方法存放缓存，第二个方法清空缓存
+
+```java
+// 调用该方法时会将结果缓存，缓存名为category，key为方法名
+// sync表示该方法的缓存被读取时会加锁 // value等同于cacheNames // key如果是字符串"''"
+@Cacheable(value = {"category"},key = "#root.methodName",sync = true)
+public Map<String, List<Catalog2Vo>> getCatalogJsonDbWithSpringCache() {
+    return getCategoriesDb();
+}
+
+//调用该方法会删除缓存category下的所有cache，如果要删除某个具体，用key="''"
+@Override
+@CacheEvict(value = {"category"},allEntries = true)
+public void updateCascade(CategoryEntity category) {
+    this.updateById(category);
+    if (!StringUtils.isEmpty(category.getName())) {
+        categoryBrandRelationService.updateCategory(category);
+    }
+}
+
+如果要清空多个缓存，用@Caching(evict={@CacheEvict(value="")})
+
+```
 
 对于缓存声明，Spring的缓存抽象提供了一组Java注解
 
@@ -6443,7 +6756,29 @@ Spring:
       cache-null-values: true         # 是否允许缓存空值
 ```
 
-#### 5、缓存穿透问题解决
+#### 5、SpringCache原理与不足
+
+1）、读模式
+
+- 缓存穿透：查询一个null数据。解决方案：缓存空数据，可通过spring.cache.redis.cache-null-values=true
+- 缓存击穿：大量并发进来同时查询一个正好过期的数据。解决方案：加锁 ? 默认是无加锁的;
+使用sync = true来解决击穿问题
+- 缓存雪崩：大量的key同时过期。解决：加随机时间。
+
+2)、写模式：（缓存与数据库一致）
+- 读写加锁。
+- 引入Canal，感知到MySQL的更新去更新Redis
+- 读多写多，直接去数据库查询就行
+3）、总结：
+
+常规数据（读多写少，即时性，一致性要求不高的数据，完全可以使用Spring-Cache）：
+
+写模式(只要缓存的数据有过期时间就足够了)
+
+特殊数据：特殊设计
+
+
+
 
 ```java
 /**
@@ -6461,20 +6796,6 @@ Spring:
  *      1、指定缓存使用的key     key属性指定，接收一个SpEl
  *      2、指定缓存数据的存活时间  配置文件中修改ttl
  *      3、将数据保存为json格式
- * 4、Spring-Cache的不足：
- *      1、读模式：
- *          缓存穿透:查询一个null数据，解决 缓存空数据：ache-null-values=true
- *          缓存击穿:大量并发进来同时查询一个正好过期的数据，解决:加锁 ？ 默认是无加锁
- *          缓存雪崩:大量的key同时过期，解决：加上随机时间，Spring-cache-redis-time-to-live
- *       2、写模式：（缓存与数据库库不一致）
- *          1、读写加锁
- *          2、引入canal，感知到MySQL的更新去更新数据库
- *          3、读多写多，直接去数据库查询就行
- *
- *    总结：
- *      常规数据（读多写少，即时性，一致性要求不高的数据）完全可以使用SpringCache 写模式（ 只要缓存数据有过期时间就足够了）
- *
- *    特殊数据：特殊设计
  *      原理：
  *          CacheManager(RedisManager) -> Cache(RedisCache) ->Cache负责缓存的读写
  * @return
@@ -6635,7 +6956,7 @@ public class SearchResult {
      */
     private Integer totalPages;
     /**
-     * 当前查询到的结果，所有设计的品牌
+     * 当前查询到的结果，所有涉及的品牌
      */
     private List<BrandVo> brands;
     /**
@@ -7141,7 +7462,58 @@ private SearchResult buildSearchResult(SearchResponse response, SearchParam para
 
 #### 7.4.1基本数据渲染
 
-![image-20201105124530345](image-20201105124530345.png)
+将商品的基本属性渲染出来
+
+```html
+<div class="rig_tab">
+    <!-- 遍历各个商品-->
+    <div th:each="product : ${result.getProduct()}">
+        <div class="ico">
+            <i class="iconfont icon-weiguanzhu"></i>
+            <a href="/static/search/#">关注</a>
+        </div>
+        <p class="da">
+            <a th:href="|http://item.gulimall.com/${product.skuId}.html|" >
+                <!--图片 -->
+                <img   class="dim" th:src="${product.skuImg}">
+            </a>
+        </p>
+        <ul class="tab_im">
+            <li><a href="/static/search/#" title="黑色">
+                <img th:src="${product.skuImg}"></a></li>
+        </ul>
+        <p class="tab_R">
+              <!-- 价格 -->
+            <span th:text="'￥' + ${product.skuPrice}">¥5199.00</span>
+        </p>
+        <p class="tab_JE">
+            <!-- 标题 -->
+            <!-- 使用utext标签,使检索时高亮不会被转义-->
+            <a href="/static/search/#" th:utext="${product.skuTitle}">
+                Apple iPhone 7 Plus (A1661) 32G 黑色 移动联通电信4G手机
+            </a>
+        </p>
+        <p class="tab_PI">已有<span>11万+</span>热门评价
+            <a href="/static/search/#">二手有售</a>
+        </p>
+        <p class="tab_CP"><a href="/static/search/#" title="谷粒商城Apple产品专营店">谷粒商城Apple产品...</a>
+            <a href='#' title="联系供应商进行咨询">
+                <img src="/static/search/img/xcxc.png">
+            </a>
+        </p>
+        <div class="tab_FO">
+            <div class="FO_one">
+                <p>自营
+                    <span>谷粒商城自营,品质保证</span>
+                </p>
+                <p>满赠
+                    <span>该商品参加满赠活动</span>
+                </p>
+            </div>
+        </div>
+    </div>
+</div>
+```
 
 
 
@@ -7153,17 +7525,95 @@ private SearchResult buildSearchResult(SearchResponse response, SearchParam para
 
 #### 7.4.3 筛选条件渲染
 
-品牌条件筛选
+将用于筛选的品牌、分类、商品属性信息进行遍历显示，并且点击某个属性值时可以通过拼接url进行跳转
 
-![image-20201105125018666](image-20201105125018666.png)
+```html
+<div class="JD_nav_logo">
+    <!--品牌筛选-->
+    <div class="JD_nav_wrap">
+        <div class="sl_key">
+            <span>品牌：</span>
+        </div>
+        <div class="sl_value">
+            <div class="sl_value_logo">
+                <ul>
+                    <li th:each="brand: ${result.getBrands()}">
+                        <!--替换url 传入搜索字符串和品牌id,进行查询-->
+                        <a href="#"  th:href="${'javascript:searchProducts(&quot;brandId&quot;,'+brand.brandId+')'}">
+                            <img src="/static/search/img/598033b4nd6055897.jpg" alt="" th:src="${brand.brandImg}">
+                            <div th:text="${brand.brandName}">
+                                华为(HUAWEI)
+                            </div>
+                        </a>
+                    </li>
+                </ul>
+            </div>
+        </div>
+        <div class="sl_ext">
+            <a href="#">
+                更多
+                <i style='background: url("image/search.ele.png")no-repeat 3px 7px'></i>
+                <b style='background: url("image/search.ele.png")no-repeat 3px -44px'></b>
+            </a>
+            <a href="#">
+                多选
+                <i>+</i>
+                <span>+</span>
+            </a>
+        </div>
+    </div>
+    <!--分类信息筛选-->
+    <div class="JD_pre" th:each="catalog: ${result.getCatalogs()}">
+        <div class="sl_key">
+            <span>分类：</span>
+        </div>
+        <div class="sl_value">
+            <ul>
+                <li><a href="#" th:text="${catalog.getCatalogName()}" th:href="${'javascript:searchProducts(&quot;catalogId&quot;,'+catalog.catalogId+')'}">0-安卓（Android）</a></li>
+            </ul>
+        </div>
+    </div>
+    <!--价格-->
+    <div class="JD_pre">
+        <div class="sl_key">
+            <span>价格：</span>
+        </div>
+        <div class="sl_value">
+            <ul>
+                <li><a href="#">0-499</a></li>
+                <li><a href="#">500-999</a></li>
+                <li><a href="#">1000-1699</a></li>
+                <li><a href="#">1700-2799</a></li>
+                <li><a href="#">2800-4499</a></li>
+                <li><a href="#">4500-11999</a></li>
+                <li><a href="#">12000以上</a></li>
+                <li class="sl_value_li">
+                    <input type="text">
+                    <p>-</p>
+                    <input type="text">
+                    <a href="#">确定</a>
+                </li>
+            </ul>
+        </div>
+    </div>
+    <!--商品属性筛选-->
+    <!-- 注:将前面请求数据时已选择的规格参数排除出去-->
+        <div class="JD_pre" th:each="attr : ${result.attrs}" th:if="${!#lists.contains(result.attrIds,attr.attrId)}">
+          <div class="sl_key">
+            <span th:text="${attr.attrName}">属性名字</span>
+          </div>
+          <div class="sl_value">
+            <ul>
+              <li th:each="val : ${attr.attrValue}"><a th:href="${'javascript:searchProducts(&quot;attrs&quot;, &quot;' + attr.attrId + '_' + val + '&quot;)'}" th:text="${val}">显示所有属性值</a></li>
+            </ul>
+          </div>
+        </div>
+</div>
+```
 
-分类
 
-![image-20201105125250519](image-20201105125250519.png)
 
-属性筛选
 
-![image-20201105125718289](image-20201105125718289.png)
 
 
 
@@ -7213,19 +7663,119 @@ function searchProducts(name, value) {
 
 #### 7.4.4 分页数据筛选
 
-![image-20201105125925391](image-20201105125925391.png)
+将页码绑定至属性pn，当点击某页码时，通过获取pn值进行url拼接跳转页面
 
+```html
+<div class="filter_page">
+    <div class="page_wrap">
+        <span class="page_span1">
+               <!-- 不是第一页时显示上一页 -->
+            <a class="page_a" href="#" th:if="${result.pageNum>1}" th:attr="pn=${result.getPageNum()-1}">
+                < 上一页
+            </a>
+             <!-- 将各个页码遍历显示，并将当前页码绑定至属性pn -->
+            <a href="#" class="page_a"
+               th:each="page: ${result.pageNavs}"
+               th:text="${page}"
+               th:style="${page==result.pageNum?'border: 0;color:#ee2222;background: #fff':''}"
+               th:attr="pn=${page}"
+            >1</a>
+              <!-- 不是最后一页时显示下一页 -->
+            <a href="#" class="page_a" th:if="${result.pageNum<result.totalPages}" th:attr="pn=${result.getPageNum()+1}">
+                下一页 >
+            </a>
+        </span>
+        <span class="page_span2">
+            <em>共<b th:text="${result.totalPages}">169</b>页&nbsp;&nbsp;到第</em>
+            <input type="number" value="1" class="page_input">
+            <em>页</em>
+            <a href="#">确定</a>
+        </span>
+    </div>
+</div>
+```
 
+```javascript
+$(".page_a").click(function () {
+    var pn=$(this).attr("pn");
+    location.href=replaceParamVal(location.href,"pageNum",pn,false);
+    console.log(replaceParamVal(location.href,"pageNum",pn,false))
+})
+```
 
 
 
 #### 7.4.5 页面排序功能
 
-![image-20201105130422378](image-20201105130422378.png)
+#### 
+
+![](images/Snipaste_2020-09-18_12-47-55.png)
+
+页面排序功能需要保证，点击某个按钮时，样式会变红，并且其他的样式保持最初的样子；
+
+点击某个排序时首先按升序显示，再次点击再变为降序，并且还会显示上升或下降箭头
+
+页面排序跳转的思路是通过点击某个按钮时会向其`class`属性添加/去除`desc`，并根据属性值进行url拼接
+
+```html
+<div class="filter_top">
+    <div class="filter_top_left" th:with="p = ${param.sort}, priceRange = ${param.skuPrice}">
+        <!-- 通过判断当前class是否有desc来进行样式的渲染和箭头的显示-->
+        <a sort="hotScore"
+           th:class="${(!#strings.isEmpty(p) && #strings.startsWith(p,'hotScore') && #strings.endsWith(p,'desc')) ? 'sort_a desc' : 'sort_a'}"
+           th:attr="style=${(#strings.isEmpty(p) || #strings.startsWith(p,'hotScore')) ?
+               'color: #fff; border-color: #e4393c; background: #e4393c;':'color: #333; border-color: #ccc; background: #fff;' }">
+            综合排序[[${(!#strings.isEmpty(p) && #strings.startsWith(p,'hotScore') &&
+            #strings.endsWith(p,'desc')) ?'↓':'↑' }]]</a>
+        <a sort="saleCount"
+           th:class="${(!#strings.isEmpty(p) && #strings.startsWith(p,'saleCount') && #strings.endsWith(p,'desc')) ? 'sort_a desc' : 'sort_a'}"
+           th:attr="style=${(!#strings.isEmpty(p) && #strings.startsWith(p,'saleCount')) ?
+               'color: #fff; border-color: #e4393c; background: #e4393c;':'color: #333; border-color: #ccc; background: #fff;' }">
+            销量[[${(!#strings.isEmpty(p) && #strings.startsWith(p,'saleCount') &&
+            #strings.endsWith(p,'desc'))?'↓':'↑'  }]]</a>
+        <a sort="skuPrice"
+           th:class="${(!#strings.isEmpty(p) && #strings.startsWith(p,'skuPrice') && #strings.endsWith(p,'desc')) ? 'sort_a desc' : 'sort_a'}"
+           th:attr="style=${(!#strings.isEmpty(p) && #strings.startsWith(p,'skuPrice')) ?
+               'color: #fff; border-color: #e4393c; background: #e4393c;':'color: #333; border-color: #ccc; background: #fff;' }">
+            价格[[${(!#strings.isEmpty(p) && #strings.startsWith(p,'skuPrice') &&
+            #strings.endsWith(p,'desc'))?'↓':'↑'  }]]</a>
+        <a sort="hotScore" class="sort_a">评论分</a>
+        <a sort="hotScore" class="sort_a">上架时间</a>
+        <!--价格区间搜索-->
+        <input id="skuPriceFrom" type="number"
+               th:value="${#strings.isEmpty(priceRange)?'':#strings.substringBefore(priceRange,'_')}"
+               style="width: 100px; margin-left: 30px">
+        -
+        <input id="skuPriceTo" type="number"
+               th:value="${#strings.isEmpty(priceRange)?'':#strings.substringAfter(priceRange,'_')}"
+               style="width: 100px">
+        <button id="skuPriceSearchBtn">确定</button>
+    </div>
+    <div class="filter_top_right">
+        <span class="fp-text">
+           <b>1</b><em>/</em><i>169</i>
+       </span>
+        <a href="#" class="prev"><</a>
+        <a href="#" class="next"> > </a>
+    </div>
+</div>
+```
+
+```javascript
+$(".sort_a").click(function () {
+    	//添加、剔除desc
+        $(this).toggleClass("desc");
+    	//获取sort属性值并进行url跳转
+        let sort = $(this).attr("sort");
+        sort = $(this).hasClass("desc") ? sort + "_desc" : sort + "_asc";
+        location.href = replaceParamVal(location.href, "sort", sort,false);
+        return false;
+    });
+```
 
 #### 7.4.6 页面价格筛选
 
-![image-20201105131105507](image-20201105131105507.png)
+![image-20201105131105507](images/image-20201105131105507.png)
 
 JS
 
@@ -7245,11 +7795,54 @@ $("#skuPriceSearchBtn").click(function() {
 
 前端页面：
 
-![image-20201105131701322](image-20201105131701322.png)
+在封装结果时，将查询的属性值进行封装
+
+```java
+   // 6. 构建面包屑导航
+        List<String> attrs = searchParam.getAttrs();
+        if (attrs != null && attrs.size() > 0) {
+            List<SearchResult.NavVo> navVos = attrs.stream().map(attr -> {
+                String[] split = attr.split("_");
+                SearchResult.NavVo navVo = new SearchResult.NavVo();
+                //6.1 设置属性值
+                navVo.setNavValue(split[1]);
+                //6.2 查询并设置属性名
+                try {
+                    R r = productFeignService.info(Long.parseLong(split[0]));
+                    if (r.getCode() == 0) {
+                        AttrResponseVo attrResponseVo = JSON.parseObject(JSON.toJSONString(r.get("attr")), new TypeReference<AttrResponseVo>() {
+                        });
+                        navVo.setNavName(attrResponseVo.getAttrName());
+                    }
+                } catch (Exception e) {
+                    log.error("远程调用商品服务查询属性失败", e);
+                }
+                //6.3 设置面包屑跳转链接(当点击该链接时剔除点击属性)
+                String queryString = searchParam.get_queryString();
+                String replace = queryString.replace("&attrs=" + attr, "").replace("attrs=" + attr+"&", "").replace("attrs=" + attr, "");
+                navVo.setLink("http://search.gulimall.com/search.html" + (replace.isEmpty()?"":"?"+replace));
+                return navVo;
+            }).collect(Collectors.toList());
+            result.setNavs(navVos);
+        }
+```
+
+页面渲染
+
+```html
+<div class="JD_ipone_one c">
+    <!-- 遍历面包屑功能 -->
+    <a th:href="${nav.link}" th:each="nav:${result.navs}">
+        <span th:text="${nav.navName}"></span>：
+        <span th:text="${nav.navValue}"></span> x</a>
+</div>
+```
+
+<img src="images/Snipaste_2020-09-18_12-59-52.png" style="zoom: 50%;" />
 
 在返回Vo类中 新增了
 
-![image-20201105131841728](image-20201105131841728.png)
+![image-20201105131841728](images/image-20201105131841728.png)
 
 Controller中 的解析方法中
 
@@ -7299,7 +7892,7 @@ Controller中 的解析方法中
                     replace = replaceQueryString(param,brandVo.getBrandId() + "","brandId");
                 }
                 navVo.setNavValue(buffer.toString());
-                navVo.setLink("http://search.gulimall.com/list.html?" + replace);
+                navVo.setLink("http://search.hanhunmall.com/list.html?" + replace);
             }
             navs.add(navVo);
         }
