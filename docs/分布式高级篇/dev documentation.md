@@ -1,10 +1,8 @@
-
 ---
-
 typora-root-url: images
 typora-copy-images-to: images
-
 ---
+
 
 
 # 谷粒商城高级篇
@@ -7975,7 +7973,7 @@ new ThreadPollExecutor(corePoolSize,maximumPoolSize,keepAliveTime,TimeUnit,unit,
   - 通过重复利用已创建好的线程降低线程的创建和销毁带来的损耗
 - 提高响应速度
   - 因为线程池中的线程没有超过线程池的最大上限时，有的线程处于等待分配任务的状态，当任务来时无需创建新的线程就能执行
-- 提高线程的客观理性
+- 提高线程的可管理性
   - 线程池会根据当前系统的特点对池内的线程进行优化处理，减少创建和销毁线程带来的系统开销，无限的创建和销毁线程不仅消耗系统资源，还降低系统的稳定性，使用线程池进行统一分配
 
 ### 8.2 CompletableFuture 异步编排
@@ -8085,7 +8083,7 @@ CompletableFuture<Integer> future = CompletableFuture.supplyAsync(() -> {
 
 ![image-20201105195632819](image-20201105195632819.png)
 
-thenApply 方法：**当一个线程依赖另一个线程时，获取上一个任务返回的结果，并返回当前任物的返回值**
+thenApply 方法：**当一个线程依赖另一个线程时，获取上一个任务返回的结果，并返回当前任务的返回值**
 
 thenAccept方法：**消费处理结果，接受任务处理结果，并消费处理，无返回结果**
 
@@ -8277,7 +8275,7 @@ public class SkuItemVo {
     // 2、sku的图片信息 pms_sku_images
     List<SkuImagesEntity> images;
     // 3、获取spu的销售属性组
-    List<SkuItemSalAttrVo> saleAttr;
+    List<SkuItemSaleAttrVo> saleAttr;
     // 4、获取spu的介绍
     SpuInfoDescEntity desc;
     // 5、获取spu的规格参数信息
@@ -8316,96 +8314,208 @@ public class AttrValueWithSkuIdVo {
 }
 ```
 
+```java
+@Data
+@ToString
+public class SpuItemAttrGroupVo {
+
+    private String groupName;
+
+    //attrId,attrName,attrValue
+    private List<Attr> attrs;
+
+}
+```
+
+
+
 ### 9.2 查询详情
 
+#### (1) 总体思路
+
 ```java
-@Override
-public SkuItemVo item(Long skuId) throws ExecutionException, InterruptedException {
+@GetMapping("/{skuId}.html")
+public String skuItem(@PathVariable("skuId") Long skuId, Model model) {
+    SkuItemVo skuItemVo=skuInfoService.item(skuId);
+    model.addAttribute("item", skuItemVo);
+    return "item";
+}
+
+ 	@Override
+    public SkuItemVo item(Long skuId) {
+        SkuItemVo skuItemVo = new SkuItemVo();
+        //1、sku基本信息的获取  pms_sku_info
+        SkuInfoEntity skuInfoEntity = this.getById(skuId);
+        skuItemVo.setInfo(skuInfoEntity);
+        Long spuId = skuInfoEntity.getSpuId();
+        Long catalogId = skuInfoEntity.getCatalogId();
+
+
+        //2、sku的图片信息    pms_sku_images
+        List<SkuImagesEntity> skuImagesEntities = skuImagesService.list(new QueryWrapper<SkuImagesEntity>().eq("sku_id", skuId));
+        skuItemVo.setImages(skuImagesEntities);
+
+        //3、获取spu的销售属性组合-> 依赖1 获取spuId
+        List<SkuItemSaleAttrVo> saleAttrVos=skuSaleAttrValueService.listSaleAttrs(spuId);
+        skuItemVo.setSaleAttr(saleAttrVos);
+
+        //4、获取spu的介绍-> 依赖1 获取spuId
+        SpuInfoDescEntity byId = spuInfoDescService.getById(spuId);
+        skuItemVo.setDesc(byId);
+
+        //5、获取spu的规格参数信息-> 依赖1 获取spuId catalogId
+        List<SpuItemAttrGroupVo> spuItemAttrGroupVos=productAttrValueService.getProductGroupAttrsBySpuId(spuId, catalogId);
+        skuItemVo.setGroupAttrs(spuItemAttrGroupVos);
+        //TODO 6、秒杀商品的优惠信息
+
+        return skuItemVo;
+    }
+```
+
+#### (2) 获取spu的销售属性
+
+由于我们需要获取该spu下所有sku的销售属性，因此我们需要先从`pms_sku_info`查出该`spuId`对应的`skuId`，
+
+<img src="/Snipaste_2020-09-21_00-08-20.png" style="zoom: 33%;" />
+
+再在`pms_sku_sale_attr_value`表中查出上述`skuId`对应的属性
+
+<img src="/Snipaste_2020-09-21_00-07-08.png" style="zoom:38%;" />
+
+因此我们需要使用连表查询，并且通过分组将单个属性值对应的多个`spuId`组成集合，效果如下
+
+<img src="/Snipaste_2020-09-21_00-11-39.png" style="zoom: 50%;" />
+
+==为什么要设计成这种模式呢？==
+
+因为这样可以在页面显示切换属性时，快速得到对应skuId的值，比如白色对应的`sku_ids`为30,29，8+128GB对应的`sku_ids`为29,31,27，那么销售属性为`白色、8+128GB`的商品的`skuId`则为二者的交集29
+
+```xml
+<resultMap id="SkuItemSaleAttrMap" type="io.niceseason.gulimall.product.vo.SkuItemSaleAttrVo">
+        <result property="attrId" column="attr_id"/>
+        <result property="attrName" column="attr_name"/>
+        <collection property="attrValues" ofType="io.niceseason.gulimall.product.vo.AttrValueWithSkuIdVo">
+            <result property="attrValue" column="attr_value"/>
+            <result property="skuIds" column="sku_ids"/>
+        </collection>
+    </resultMap>
+
+    <select id="listSaleAttrs" resultMap="SkuItemSaleAttrMap">
+        SELECT attr_id,attr_name,attr_value,GROUP_CONCAT(info.sku_id) sku_ids FROM pms_sku_info info
+        LEFT JOIN pms_sku_sale_attr_value ssav ON info.sku_id=ssav.sku_id
+        WHERE info.spu_id=#{spuId}
+        GROUP BY ssav.attr_id,ssav.attr_name,ssav.attr_value
+    </select>
+```
+
+#### (3) 获取spu的规格参数信息
+
+由于需要通过`spuId`和`catalogId`查询对应规格参数，所以我们需要通过`pms_attr_group表`获得`catalogId`和`attrGroupName`
+
+
+
+<img src="/Snipaste_2020-09-21_00-24-35.png" style="zoom: 50%;" />
+
+然后通过` pms_attr_attrgroup_relation`获取分组对应属性id
+
+<img src="/Snipaste_2020-09-21_00-26-48.png" style="zoom: 50%;" />
+
+再到`   pms_product_attr_value`查询spuId对应的属性
+
+<img src="/Snipaste_2020-09-21_00-27-51.png" style="zoom:50%;" />
+
+最终sql效果,联表含有需要的所有属性
+
+<img src="/Snipaste_2020-09-21_00-29-01.png" style="zoom:50%;" />
+
+```java
+@Mapper
+public interface ProductAttrValueDao extends BaseMapper<ProductAttrValueEntity> {
+
+    List<SpuItemAttrGroupVo> getProductGroupAttrsBySpuId(@Param("spuId") Long spuId, @Param("catalogId") Long catalogId);
+}
+```
+
+```xml
+<resultMap id="ProductGroupAttrsMap" type="io.niceseason.gulimall.product.vo.SpuItemAttrGroupVo">
+    <result property="groupName" column="attr_group_name"/>
+    <collection property="attrs" ofType="io.niceseason.gulimall.product.vo.Attr">
+        <result property="attrId" column="attr_id"/>
+        <result property="attrName" column="attr_name"/>
+        <result property="attrValue" column="attr_value"/>
+    </collection>
+</resultMap>
+
+<select id="getProductGroupAttrsBySpuId" resultMap="ProductGroupAttrsMap">
+    SELECT ag.attr_group_name,attr.attr_id,attr.attr_name,attr.attr_value
+    FROM pms_attr_attrgroup_relation aar 
+    LEFT JOIN pms_attr_group ag ON aar.attr_group_id=ag.attr_group_id
+    LEFT JOIN pms_product_attr_value attr ON aar.attr_id=attr.attr_id
+    WHERE attr.spu_id = #{spuId} AND ag.catelog_id = #{catalogId}
+</select>
+```
+
+### 3. 使用异步编排
+
+为了使我们的任务进行的更快，我们可以让查询的各个子任务多线程执行，但是由于各个任务之间可能有相互依赖的关系，因此就涉及到了异步编排。
+
+在这次查询中spu的销售属性、介绍、规格参数信息都需要`spuId`,因此依赖sku基本信息的获取,所以我们要让这些任务在1之后运行。因为我们需要1运行的结果，因此调用`thenAcceptAsync()`可以接受上一步的结果且没有返回值。
+
+最后时，我们需要调用`get()`方法使得所有方法都已经执行完成
+
+```java
+public SkuItemVo item(Long skuId) {
     SkuItemVo skuItemVo = new SkuItemVo();
-    // 1、sku基本获取 pms_sku_info
     CompletableFuture<SkuInfoEntity> infoFuture = CompletableFuture.supplyAsync(() -> {
-        // 根据 skuid 查询出 spuInfo对象
-        SkuInfoEntity info = getById(skuId);
-        skuItemVo.setSkuInfo(info);
-        return info;
+        //1、sku基本信息的获取  pms_sku_info
+        SkuInfoEntity skuInfoEntity = this.getById(skuId);
+        skuItemVo.setInfo(skuInfoEntity);
+        return skuInfoEntity;
     }, executor);
 
-    CompletableFuture<Void> saleAttrFuture = infoFuture.thenAcceptAsync((res) -> {
-        // 3、获取spu的销售属性组合
-        List<SkuItemSalAttrVo> saleAttrVos = skuSaleAttrValueService.getSaleAttrBySpuId(res.getSpuId());
+    //2、sku的图片信息    pms_sku_images
+    CompletableFuture<Void> imageFuture = CompletableFuture.runAsync(() -> {
+        List<SkuImagesEntity> skuImagesEntities = skuImagesService.list(new QueryWrapper<SkuImagesEntity>().eq("sku_id", skuId));
+        skuItemVo.setImages(skuImagesEntities);
+    }, executor);
+
+
+    //3、获取spu的销售属性组合-> 依赖1 获取spuId
+    CompletableFuture<Void> saleFuture = infoFuture.thenAcceptAsync((info) -> {
+        List<SkuItemSaleAttrVo> saleAttrVos = skuSaleAttrValueService.listSaleAttrs(info.getSpuId());
         skuItemVo.setSaleAttr(saleAttrVos);
     }, executor);
 
-    CompletableFuture<Void> descFuture = infoFuture.thenAcceptAsync(res -> {
-        // 4、获取spu的介绍
-        // 通过spuid查询出spu描述信息
-        SpuInfoDescEntity spuInfoDescEntity = spuInfoDescService.getById(res.getSpuId());
-        skuItemVo.setDesc(spuInfoDescEntity);
+
+    //4、获取spu的介绍-> 依赖1 获取spuId
+    CompletableFuture<Void> descFuture = infoFuture.thenAcceptAsync((info) -> {
+        SpuInfoDescEntity byId = spuInfoDescService.getById(info.getSpuId());
+        skuItemVo.setDesc(byId);
     }, executor);
 
-    CompletableFuture<Void> baseFuture = infoFuture.thenAcceptAsync(res -> {
-        // 5、获取spu的规格参数信息
-        List<SpuItemAttrGroupVo> attrGroupVos = attrGroupService.getAttrGroupWithAttrBySpuId(res.getSpuId(), res.getCatalogId());
-        skuItemVo.setGroupAttrs(attrGroupVos);
+
+    //5、获取spu的规格参数信息-> 依赖1 获取spuId catalogId
+    CompletableFuture<Void> attrFuture = infoFuture.thenAcceptAsync((info) -> {
+        List<SpuItemAttrGroupVo> spuItemAttrGroupVos=productAttrValueService.getProductGroupAttrsBySpuId(info.getSpuId(), info.getCatalogId());
+        skuItemVo.setGroupAttrs(spuItemAttrGroupVos);
     }, executor);
 
-    CompletableFuture<Void> imageFuture = CompletableFuture.runAsync(() -> {
-        // 2、sku的图片信息 pms_sku_images
-        List<SkuImagesEntity> images = imagesService.getImagesBySkuId(skuId);
-        skuItemVo.setImages(images);
-    }, executor);
+    //TODO 6、秒杀商品的优惠信息
 
-    // 等待所有任务完成
-    CompletableFuture.allOf(saleAttrFuture, descFuture, baseFuture, imageFuture).get();
+    //等待所有任务执行完成
+    try {
+        CompletableFuture.allOf(imageFuture, saleFuture, descFuture, attrFuture).get();
+    } catch (InterruptedException e) {
+        e.printStackTrace();
+    } catch (ExecutionException e) {
+        e.printStackTrace();
+    }
 
     return skuItemVo;
 }
 ```
 
-获取spu的销售属性组合
 
-```java
-  <select id="getSaleAttrBySpuId" resultMap="SkuItemSaleAttrVo">
-             SELECT
-          ssav.`attr_id` attr_id,
-          ssav.`attr_name` attr_name,
-          ssav.`attr_value` ,
-          GROUP_CONCAT(DISTINCT info.`sku_id`) sku_ids
-        FROM
-          `pms_sku_info` info
-          LEFT JOIN `pms_sku_sale_attr_value` ssav
-            ON ssav.`sku_id` = info.`sku_id`
-        WHERE info.`spu_id` = #{spuId}
-        GROUP BY ssav.`attr_id`,ssav.`attr_name`,ssav.`attr_value`
-    </select>
-```
-
-获取spu的规格参数信息
-
-```
-<select id="getAttrGroupWithAttrsBySpuId"
-        resultMap="spuItemAttrGroupVo">
-    SELECT
-      pav.`spu_id`,
-      ag.`attr_group_name` ,
-      ag.`attr_group_id`,
-      aar.`attr_id`,
-      attr.`attr_name`,
-      pav.`attr_value`
-    FROM
-      `pms_attr_group` ag
-      LEFT JOIN `pms_attr_attrgroup_relation` aar
-        ON aar.`attr_group_id` = ag.`attr_group_id`
-      LEFT JOIN `pms_attr` attr
-        ON attr.`attr_id` = aar.`attr_id`
-      LEFT JOIN `pms_product_attr_value` pav
-        ON pav.`attr_id` = attr.`attr_id`
-    WHERE ag.`catelog_id` = #{catalogId}
-      AND pav.`spu_id` = #{spuId}
-</select>
-```
-
-其他都是通过对应关联的 `id` 进行查询，就上面两个查询销售属性、规格参数属性 比较难，SQL这块比较难以理解
 
 ### 9.3 sku 组合切换
 
@@ -8451,12 +8561,17 @@ public SkuItemVo item(Long skuId) throws ExecutionException, InterruptedExceptio
 
 ### 10.1 环境搭建
 
-- 为登录和注册创建一个服务
-- 讲提供的前端放到  `templates` 目录下
+- 为登录和注册创建一个服务，创建`gulimall-auth-server`模块，导依赖
+- 引入`login.html`和`reg.html`，将提供的前端放到  `templates` 目录下
+- 并把静态资源放到nginx的static目录下
 
 ![image-20201110084252039](image-20201110084252039.png)
 
 ### 10.2 前端验证码倒计时
+
+#### 
+
+<img src="/Snipaste_2020-09-22_19-13-55.png" style="zoom:38%;" />
 
 定义id 使用 `Jquery` 触发点击事件
 
@@ -8489,7 +8604,7 @@ var num = 60;
 function timeoutChangeStyle() {
     // 先添加样式，防止重复点击
     $("#sendCode").attr("class", "disabled")
-    // 到达0秒后 重置时间，去除样式
+    // 到达0秒后 说明倒计时完成，重置时间，去除样式
     if (num == 0) {
         $("#sendCode").text("发送验证码")
         num = 60;
@@ -8577,15 +8692,92 @@ public void contextLoads() {
 
 需要导入对应工具类，参照注释就行
 
+在`gulimall-third-party`中编写发送短信组件,其中`host`、`path`、`appcode`可以在配置文件中使用前缀`spring.cloud.alicloud.sms`进行配置
+
+```java
+@Data
+@ConfigurationProperties(prefix = "spring.cloud.alicloud.sms")
+@Controller
+public class SmsComponent {
+
+    private String host;
+    private String path;
+    private String appcode;
+
+    public void sendCode(String phone,String code) {
+//        String host = "http://dingxin.market.alicloudapi.com";
+//        String path = "/dx/sendSms";
+        String method = "POST";
+//        String appcode = "你自己的AppCode";
+        Map<String, String> headers = new HashMap<String, String>();
+        //最后在header中的格式(中间是英文空格)为Authorization:APPCODE 83359fd73fe94948385f570e3c139105
+        headers.put("Authorization", "APPCODE " + appcode);
+        Map<String, String> querys = new HashMap<String, String>();
+        querys.put("mobile",phone);
+        querys.put("param", "code:"+code);
+        querys.put("tpl_id", "TP1711063");
+        Map<String, String> bodys = new HashMap<String, String>();
+
+
+        try {
+            /**
+             * 重要提示如下:
+             * HttpUtils请从
+             * https://github.com/aliyun/api-gateway-demo-sign-java/blob/master/src/main/java/com/aliyun/api/gateway/demo/util/HttpUtils.java
+             * 下载
+             *
+             * 相应的依赖请参照
+             * https://github.com/aliyun/api-gateway-demo-sign-java/blob/master/pom.xml
+             */
+            HttpResponse response = HttpUtils.doPost(host, path, method, headers, querys, bodys);
+            System.out.println(response.toString());
+            //获取response的body
+            //System.out.println(EntityUtils.toString(response.getEntity()));
+        } catch (Exception e) {
+            e.printStackTrace();
+        }
+    }
+}
+```
+
+编写controller，给别的服务提供远程调用发送验证码的接口
+
+```java
+@Controller
+@RequestMapping(value = "/sms")
+public class SmsSendController {
+
+    @Resource
+    private SmsComponent smsComponent;
+
+    /**
+     * 提供给别的服务进行调用
+     * @param phone 电话号码
+     * @param code 验证码
+     * @return
+     */
+    @ResponseBody
+    @GetMapping(value = "/sendCode")
+    public R sendCode(@RequestParam("phone") String phone, @RequestParam("code") String code) {
+
+        //发送验证码
+        smsComponent.sendCode(phone,code);
+        System.out.println(phone+code);
+        return R.ok();
+    }
+}
+```
+
 
 
 ### 10.4 验证码防刷校验
 
-用户要是一直提交验证码
+- 由于发送验证码的接口暴露，为了防止恶意攻击，我们不能随意让接口被调用。
 
-- 前台：限制一分钟后提交
-
-- 后台：存入redis 如果有就返回
+  * 在redis中以`phone-code`将电话号码和验证码进行存储并将当前时间与code一起存储
+    * 如果调用时以当前`phone`取出的v不为空且当前时间在存储时间的60s以内，说明60s内该号码已经调用过，返回错误信息
+    * 60s以后再次调用，需要删除之前存储的`phone-code`
+    * code存在一个过期时间，我们设置为10min，10min内验证该验证码有效
 
 ```java
 /**
@@ -8596,7 +8788,7 @@ public void contextLoads() {
 @GetMapping("/sms/sendCode")
 @ResponseBody
 public R sendCode(@RequestParam("phone") String phone) {
-    // TODO 1、接口防刷
+    // 接口防刷,在redis中缓存phone-code
     // 先从redis中拿取
     String redisCode = redisTemplate.opsForValue().get(AuthServerConstant.SMS_CODE_CACHE_PREFIX + phone);
     if(!StringUtils.isEmpty(redisCode)) {
@@ -8613,7 +8805,7 @@ public R sendCode(@RequestParam("phone") String phone) {
     String code = UUID.randomUUID().toString().substring(0,5).toUpperCase();
     // 拼接验证码
     String substring = code+"_" + System.currentTimeMillis();
-    // redis缓存验证码 防止同一个phone在60秒内发出多次验证吗
+    // redis缓存验证码并设置过期时间 防止同一个phone在60秒内发出多次验证吗
     redisTemplate.opsForValue().set(AuthServerConstant.SMS_CODE_CACHE_PREFIX+phone,substring,10, TimeUnit.MINUTES);
 
     // 调用第三方服务发送验证码
@@ -8663,6 +8855,14 @@ public class UserRegistVo {
 
 #### 3、数据校验
 
+在`gulimall-auth-server`服务中编写注册的主体逻辑
+
+* 若JSR303校验未通过，则通过`BindingResult`封装错误信息，并重定向至注册页面
+* 若通过JSR303校验，则需要从`redis`中取值判断验证码是否正确，正确的话通过会员服务注册
+* 会员服务调用成功则重定向至登录页，否则封装远程服务返回的错误信息返回至注册页面
+
+注： `RedirectAttributes`可以通过session保存信息并在重定向的时候携带过去
+
 ```java
 /**
  * //TODO 重定向携带数据，利用session原理，将数据放在session中，
@@ -8699,9 +8899,10 @@ public String regist(@Valid UserRegistVo vo, BindingResult result,
             // 调用远程服务，真正注册
             R r = memberFeignService.regist(vo);
             if (r.getCode() == 0) {
-                // 远程调用注册服务成功
+                // 远程调用注册服务成功，重定向登录页
                 return "redirect:http://auth.gulimall.com/login.html";
             } else {
+                //调用失败，返回注册页并显示错误信息
                 Map<String, String> errors = new HashMap<>();
                 errors.put("msg",r.getData(new TypeReference<String>(){}));
                 redirectAttributes.addFlashAttribute("errors", errors);
@@ -8715,6 +8916,7 @@ public String regist(@Valid UserRegistVo vo, BindingResult result,
             return "redirect:http://auth.gulimall.com/reg.html";
         }
     } else {
+        //2.2 验证码错误
         Map<String, String> errors = new HashMap<>();
         errors.put("code", "验证码错误");
         redirectAttributes.addFlashAttribute("code", "验证码错误");
@@ -8730,7 +8932,10 @@ public String regist(@Valid UserRegistVo vo, BindingResult result,
 
 #### 5、异常机制 & 用户注册
 
-- 用户注册单独抽出了一个服务
+通过`gulimall-member`会员服务注册逻辑
+
+* 通过异常机制判断当前注册会员名和电话号码是否已经注册，如果已经注册，则抛出对应的自定义异常，并在返回时封装对应的错误信息
+* 如果没有注册，则封装传递过来的会员信息，并设置默认的会员等级、创建时间
 
 Controller
 
@@ -8756,45 +8961,42 @@ public R regist(@RequestBody MemberRegistVo registVo) {
 
 ```java
 @Override
-public void regist(MemberRegistVo registVo) {
-    MemberDao memberDao = this.baseMapper;
+public void register(MemberRegisterVo registerVo) {
+    //1 检查电话号是否唯一
+    checkPhoneUnique(registerVo.getPhone());
+    //2 检查用户名是否唯一
+    checkUserNameUnique(registerVo.getUserName());
+    //3 该用户信息唯一，进行插入
     MemberEntity entity = new MemberEntity();
-
-    // 设置默认等级
-    MemberLevelEntity memberLevelEntity = memberLevelDao.getDefaultLevel();
-    entity.setLevelId(memberLevelEntity.getId());
-
-
-    // 检查手机号和用户名是否唯一
-    checkPhoneUnique(registVo.getPhone());
-    checkUserNameUnique(registVo.getUserName());
-
-    entity.setMobile(registVo.getPhone());
-    entity.setUsername(registVo.getUserName());
-
-    //密码要加密存储
+    //3.1 保存基本信息
+    entity.setUsername(registerVo.getUserName());
+    entity.setMobile(registerVo.getPhone());
+    entity.setCreateTime(new Date());
+    //3.2 使用加密保存密码
     BCryptPasswordEncoder passwordEncoder = new BCryptPasswordEncoder();
-    String encode = passwordEncoder.encode(registVo.getPassword());
-    entity.setPassword(encode);
+    String encodePassword = passwordEncoder.encode(registerVo.getPassword());
+    entity.setPassword(encodePassword);
+    //3.3 设置会员默认等级
+    //3.3.1 找到会员默认登记
+    MemberLevelEntity defaultLevel = memberLevelService.getOne(new QueryWrapper<MemberLevelEntity>().eq("default_status", 1));
+    //3.3.2 设置会员等级为默认
+    entity.setLevelId(defaultLevel.getId());
 
-    memberDao.insert(entity);
+    // 4 保存用户信息
+    this.save(entity);
 }
 
-@Override
-public void checkPhoneUnique(String phone) throws PhoneExsitException {
-    MemberDao memberDao = this.baseMapper;
-    Integer mobile = memberDao.selectCount(new QueryWrapper<MemberEntity>().eq("mobile", phone));
-    if (mobile > 0) {
-        throw new PhoneExsitException();
+private void checkUserNameUnique(String userName) {
+    Integer count = baseMapper.selectCount(new QueryWrapper<MemberEntity>().eq("username", userName));
+    if (count > 0) {
+        throw new UserExistException();
     }
 }
 
-@Override
-public void checkUserNameUnique(String username) throws UserNameExistException {
-    MemberDao memberDao = this.baseMapper;
-    Integer count = memberDao.selectCount(new QueryWrapper<MemberEntity>().eq("username", username));
+private void checkPhoneUnique(String phone) {
+    Integer count = baseMapper.selectCount(new QueryWrapper<MemberEntity>().eq("mobile", phone));
     if (count > 0) {
-        throw new PhoneExsitException();
+        throw new PhoneNumExistException();
     }
 }
 ```
@@ -8830,7 +9032,51 @@ public class UserLoginVo {
 
 同时需要保证前端页面提交字段与 Vo 类中一致
 
+在`gulimall-auth-server`模块中的主体逻辑
+
+* 通过会员服务远程调用登录接口
+  * 如果调用成功，重定向至首页
+  * 如果调用失败，则封装错误信息并携带错误信息重定向至登录页
+
+```java
+@RequestMapping("/login")
+public String login(UserLoginVo vo,RedirectAttributes attributes){
+    R r = memberFeignService.login(vo);
+    if (r.getCode() == 0) {
+        return "redirect:http://gulimall.com/";
+    }else {
+        String msg = (String) r.get("msg");
+        Map<String, String> errors = new HashMap<>();
+        errors.put("msg", msg);
+        attributes.addFlashAttribute("errors", errors);
+        return "redirect:http://auth.gulimall.com/login.html";
+    }
+}
+```
+
+* 
+
 #### 2、在 Member 服务中编写接口
+
+在`gulimall-member`模块中完成登录
+
+* 当数据库中含有以当前登录名为用户名或电话号且密码匹配时，验证通过，返回查询到的实体
+
+* 否则返回null，并在controller返回`用户名或密码错误`
+
+  ```java
+  @RequestMapping("/login")
+  public R login(@RequestBody MemberLoginVo loginVo) {
+      MemberEntity entity=memberService.login(loginVo);
+      if (entity!=null){
+          return R.ok();
+      }else {
+          return R.error(BizCodeEnum.LOGINACCT_PASSWORD_EXCEPTION.getCode(), BizCodeEnum.LOGINACCT_PASSWORD_EXCEPTION.getMsg());
+      }
+  }
+  ```
+
+  
 
 ```java
 @Override
@@ -8838,7 +9084,7 @@ public MemberEntity login(MemberLoginVo vo) {
     String loginacct = vo.getLoginacct();
     String password = vo.getPassword();
 
-    // 1、去数据库查询 select * from  ums_member where username=? or mobile =?
+    // 1、以用户名或电话号登录的进行查询，去数据库查询 select * from  ums_member where username=? or mobile =?
     MemberDao memberDao = this.baseMapper;
     MemberEntity memberEntity = memberDao.selectOne(new QueryWrapper<MemberEntity>()
             .eq("username", loginacct).or().
@@ -8868,11 +9114,19 @@ public MemberEntity login(MemberLoginVo vo) {
 
 ### 11.7 分布式 Session不共享不同步问题
 
+#### 1、Session原理及分布式下的问题
+
+session存储在服务端，jsessionId存在客户端，每次通过`jsessionid`取出保存的数据
+
+问题：但是正常情况下`session`不可跨域，它有自己的作用范围
+
 我们在auth.gulimall.com中保存session，但是网址跳转到 gulimall.com中，取不出auth.gulimall.com中保存的session，这就造成了微服务下的session不同步问题
 
 ![image-20201111103637615](image-20201111103637615.png)
 
 #### 1、Session同步解决方案-分布式下session共享问题
+
+**session要能在不同服务和同服务的集群的共享**
 
 同一个服务复制多个，但是session还是只能在一个服务上保存，浏览器也是只能读取到一个服务的session
 
@@ -8900,7 +9154,7 @@ public MemberEntity login(MemberLoginVo vo) {
 
 ![image-20201111105135178](image-20201111105135178.png)
 
-### 11.8 SpringSession整合
+### 11.8 SpringSession整合redis
 
 #### 1、官网文档 阅读
 
@@ -8922,13 +9176,37 @@ public MemberEntity login(MemberLoginVo vo) {
 
 #### 2、整合SpringBoot
 
-##### 1、添加Pom.xml依赖
+##### 1、环境搭建
+
+**添加Pom.xml依赖**
 
 ![image-20201111144914600](image-20201111144914600.png)
 
-##### 2、application.yml 配置
+```xml
+    <dependency>
+        <groupId>org.springframework.session</groupId>
+        <artifactId>spring-session-data-redis</artifactId>
+    </dependency>
+    <dependency>
+        <groupId>org.springframework.boot</groupId>
+        <artifactId>spring-boot-starter-data-redis</artifactId>
+    </dependency>
+```
+
+
+
+**application.yml 配置**
 
 ![image-20201111145601673](image-20201111145601673.png)
+
+```yaml
+spring:
+  redis:
+    host: 192.168.56.102
+  session:
+    store-type: redis
+```
+
 
 ##### 3、reids配置
 
@@ -8937,7 +9215,9 @@ public MemberEntity login(MemberLoginVo vo) {
 ##### 4、启动类加上 @EnableRedisHttpSession
 
 ```java
-@EnableRedisHttpSession // 整合spring session
+// 整合spring session
+@EnableRedisHttpSession
+public class GulimallAuthServerApplication {
 ```
 
 #### 3、自定义 SpringSession 完成 Session 子域共享
@@ -8967,6 +9247,17 @@ redis中json序列化
 https://github.com/spring-projects/spring-session/blob/2.4.1/spring-session-samples/spring-session-sample-boot-redis-json/src/main/java/sample/config/SessionConfig.java
 
 ![image-20210101125303807](image-20210101125303807.png)
+
+但是现在还有一些问题：
+
+- 序列化的问题
+- cookie的domain的问题
+
+**扩大session作用域**
+
+* 由于默认使用jdk进行序列化，通过导入`RedisSerializer`修改为json序列化
+
+* 并且通过修改`CookieSerializer`扩大`session`的作用域至`**.gulimall.com`
 
 ```java
 
@@ -9006,9 +9297,9 @@ public class GulimallSessionConfig {
 }
 ```
 
+![](/Snipaste_2020-09-23_20-45-36.png)
 
-
-#### 4、SpringSession 原理 
+#### 4、SpringSession 原理  - 装饰者模式
 
 ```java
 /**
@@ -9032,10 +9323,104 @@ public class GulimallSessionConfig {
 核心源码是：
 
 - `SessionRepositoryFilter` 类下面的 `doFilterInternal` 方法
-
 - 及那个 `request`、`response` 包装成 `SessionRepositoryRequestWrapper`
 
-  ![image-20201111195249024](image-20201111195249024.png) 
+* 原生的获取`session`时是通过`HttpServletRequest`获取的
+* 这里对request进行包装，并且重写了包装request的`getSession()`方法
+
+```java
+@Override
+protected void doFilterInternal(HttpServletRequest request,
+      HttpServletResponse response, FilterChain filterChain)
+      throws ServletException, IOException {
+   request.setAttribute(SESSION_REPOSITORY_ATTR, this.sessionRepository);
+
+    //对原生的request、response进行包装
+   SessionRepositoryRequestWrapper wrappedRequest = new SessionRepositoryRequestWrapper(
+         request, response, this.servletContext);
+   SessionRepositoryResponseWrapper wrappedResponse = new SessionRepositoryResponseWrapper(
+         wrappedRequest, response);
+
+   try {
+       // 包装后的对象应用到了我们后面的整个执行链
+      filterChain.doFilter(wrappedRequest, wrappedResponse);
+   }
+   finally {
+      wrappedRequest.commitSession();
+   }
+}
+```
+
+#### (5)session的保存
+
+```java
+@GetMapping({"/login.html","/","/index","/index.html"}) // auth
+public String loginPage(HttpSession session){
+    // 从会话从获取loginUser
+    Object attribute = session.getAttribute(AuthServerConstant.LOGIN_USER);// "loginUser";
+    System.out.println("attribute:"+attribute);
+    if(attribute == null){
+        return "login";
+    }
+    System.out.println("已登陆过，重定向到首页");
+    return "redirect:http://gulimall.com";
+}
+
+
+@PostMapping("/login") // auth
+public String login(UserLoginVo userLoginVo,
+                    RedirectAttributes redirectAttributes,
+                    HttpSession session){
+    // 远程登录
+    R r = memberFeignService.login(userLoginVo);
+    if(r.getCode() == 0){
+        // 登录成功
+        MemberRespVo respVo = r.getData("data", new TypeReference<MemberRespVo>() {});
+        // 放入session  // key为loginUser
+        session.setAttribute(AuthServerConstant.LOGIN_USER, respVo);//loginUser
+        log.info("\n欢迎 [" + respVo.getUsername() + "] 登录");
+        // 登录成功重定向到首页
+        return "redirect:http://gulimall.com";
+    }else {
+        HashMap<String, String> error = new HashMap<>();
+        // 获取错误信息
+        error.put("msg", r.getData("msg",new TypeReference<String>(){}));
+        redirectAttributes.addFlashAttribute("errors", error);
+        return "redirect:http://auth.gulimall.com/login.html";
+    }
+}
+```
+
+#### 分布式登录总结
+
+登录url：http://auth.gulimall.com/login.html  
+（注意是url，不是页面。）  
+判断`session`中是否有user对象
+
+*   没有user对象，渲染login.html页面  
+    用户输入账号密码后发送给 url:auth.gulimall.com/login  
+    根据表单传过来的VO对象，远程调用memberFeignService验证密码
+    *   如果验证失败，取出远程调用返回的错误信息，放到新的请求域，重定向到登录url
+    *   如果验证成功，远程服务就返回了对应的MemberRespVo对象，  
+        然后放到分布式redis-session中，key为"loginUser"，重定向到首页gulimall.com，  
+        同时也会带着的GULISESSIONID
+        *   重定向到非auth项目后，先经过拦截器看session里有没有loginUser对象
+        *   有，放到静态threadLocal中，这样就可以操作本地内存，无需远程调用session
+        *   没有，重定向到登录页
+*   有user对象，代表登录过了，重定向到首页，session数据还依靠sessionID持有着
+
+额外说明：
+
+问题1：我们有sessionId不就可以了吗？为什么还要在session中放到User对象？  
+为了其他服务可以根据这个user查数据库，只有session的话不能再次找到登录session的用户
+
+问题2：threadlocal的作用？
+
+他是为了放到当前session的线程里，threadlocal就是这个作用，随着线程创建和消亡。把threadlocal定义为static的，这样当前会话的线程中任何代码地方都可以获取到。如果只是在session中的话，一是每次还得去redis查询，二是去调用service还得传入session参数，多麻烦啊
+
+问题3：cookie怎么回事？不是在config中定义了cookie的key和序列化器？
+
+序列化器没什么好讲的，就是为了易读和来回转换。而cookie的key其实是无所谓的，只要两个项目里的key相同，然后访问同一个域名都带着该cookie即可。
 
 
 
@@ -9063,23 +9448,42 @@ QQ、微博，github等网站的用户量非常大，别的网站为了简化网
 
 #### 11.1.1 OAuth2.0
 
+上面社交登录的流程就是OAuth协议
+
+OAuth（开放授权）是一个开放标准，允许用户授权第三方移动应用访问他们存储在另外的服务提供者上的信息，而不需要将用户名和密码提供给第三方移动应用或分享他们数据的所有内容，OAuth2.0是OAuth协议的延续版本，但不向后兼容OAuth 1.0即完全废止了OAuth1.0。
+
 - **OAuth：**OAuth（开放授权）是一个开放标准，允许用户授权第三方网站访问他们存储在另外的服务提供者上的信息，而不需要将用户名和密码提供给第三方网站或分享他们的数据的内容
 
 - **OAuth2.0：**对于用户相关的 OpenAPI（例如获取用户信息，动态同步，照片，日志，分享等），为了保存用户数据的安全和隐私，第三方网站访问用户数据前都需要显示向用户授权
 
-- 官方版流程
+  
 
-  ![img](/oAuth2_01.gif)
+![在这里插入图片描述](/1623316999-3b3dffa72b5f4df39278a74b19492e40.png)
+
+> 微信：https://developers.weixin.qq.com/doc/oplatform/Mobile\_App/WeChat\_Login/Development\_Guide.html
+>
+> 客户端是
+>
+> 资源拥有者：用户本人
+>
+> 授权服务器：QQ服务器，微信服务器等。返回访问令牌
+>
+> 资源服务器：拿着令牌访问资源服务器看令牌合法性
 
 文档地址：
 
 相关流程分析
 
-![image-20201110154532752](image-20201110154532752.png)
+![](/1623316999-c29b8d6c5153af723b48c15793ff910f.png)
 
-
+1、使用Code换取AccessToken，Code只能用一次  
+2、同一个用户的accessToken一段时间是不会变化的，即使多次获取
 
 #### 11.2 微博登录准备工作
+
+官方版流程
+
+![img](/oAuth2_01.gif)
 
 ##### 1、进入微博开放平台
 
@@ -9141,7 +9545,9 @@ QQ、微博，github等网站的用户量非常大，别的网站为了简化网
 
 ![image-20201231012207446](image-20201231012207446.png)
 
-##### 11.3.1 查看微博开放平台文档
+##### 11.3.1 在登陆页引导用户至授权页
+
+##### 查看微博开放平台文档
 
 https://open.weibo.com/wiki/%E6%8E%88%E6%9D%83%E6%9C%BA%E5%88%B6%E8%AF%B4%E6%98%8E
 
@@ -9149,11 +9555,56 @@ https://open.weibo.com/wiki/%E6%8E%88%E6%9D%83%E6%9C%BA%E5%88%B6%E8%AF%B4%E6%98%
 
 
 
+#### 
+
+```
+https://api.weibo.com/oauth2/authorize?client_id=YOUR_CLIENT_ID&response_type=code&redirect_uri=授权后跳转的uri
+
+示例：
+https://api.weibo.com/oauth2/authorize?
+client_id=刚才申请的APP-KEY &
+response_type=code&
+redirect_uri=http://hanhunmall.com/success
+```
+
+* `client_id`: 创建网站应用时的`app key` 
+* `YOUR_REGISTERED_REDIRECT_URI`: 认证完成后的跳转链接(需要和平台高级设置一致)
+
 ##### 11.3.2 点击微博登录后，跳转到微博授权页面
 
 ![image-20201111093153199](image-20201111093153199.png)
 
-##### 11.3.3 用户授权后调用回调接口，并带上参数code换取AccessToken
+如果用户同意授权(输入账号密码)，带着code，页面跳转至回调接口 YOUR_REGISTERED_REDIRECT_URI/?code=CODE（hanhunmall.com/success/?code=CODE）
+
+code是我们用来换取令牌的参数
+
+用参数code换取AccessToken
+
+#### (4) 换取token
+
+```
+https://api.weibo.com/oauth2/access_token?
+client_id=YOUR_CLIENT_ID&
+client_secret=YOUR_CLIENT_SECRET&
+grant_type=authorization_code&
+redirect_uri=YOUR_REGISTERED_REDIRECT_URI&
+code=CODE
+```
+
+* `client_id`: 创建网站应用时的`app key` 
+* `client_secret`: 创建网站应用时的`app secret` 
+* `YOUR_REGISTERED_REDIRECT_URI`: 认证完成后的跳转链接(需要和平台高级设置一致)
+* `code`：换取令牌的认证码
+
+其中client\_id=YOUR\_CLIENT\_ID&client\_secret=YOUR\_CLIENT\_SECRET可以使用basic方式加入header中，返回值
+
+<img src="/Snipaste_2020-09-23_12-27-09.png" style="zoom: 67%;" />
+
+##### 11.3.4 拿到AccessToken 请求对应接口获取用户信息
+
+https://open.weibo.com/wiki/2/users/show
+
+结果返回json
 
 ```java
 /**
@@ -9208,7 +9659,11 @@ https://open.weibo.com/wiki/%E6%8E%88%E6%9D%83%E6%9C%BA%E5%88%B6%E8%AF%B4%E6%98%
     }
 ```
 
-##### 11.3.4 拿到AccessToken 请求对应接口拿到信息
+##### token保存
+
+*   登录包含两种流程，实际上包括了注册和登录
+*   如果之前未使用该社交账号登录，则使用`token`调用开放api获取社交账号相关信息（头像等），注册并将结果返回
+*   如果之前已经使用该社交账号登录，则更新`token`并将结果返回
 
 ```java
 @Override
@@ -9252,7 +9707,7 @@ public MemberEntity login(SocialUser vo) {
                 String json = EntityUtils.toString(response.getEntity());
                 // 利用fastjson将请求返回的json转换为对象
                 JSONObject jsonObject = JSON.parseObject(json);
-                // 拿到需要的值
+                // 拿到需要的值，昵称，性别，头像
                 String name = jsonObject.getString("name");
                 String gender = jsonObject.getString("gender");
                 //.. 拿到多个信息
@@ -9278,162 +9733,241 @@ public MemberEntity login(SocialUser vo) {
 
 单点登录(SingleSignOn，SSO)，就是通过用户的一次性鉴别登录。当用户在身份认证服务器上登录一次以后，即可获得访问单点登录系统中其他关联系统和应用软件的权限，同时这种实现是不需要管理员对用户的登录状态或其他信息进行修改的，这意味着在多个应用系统中，用户只需一次登录就可以访问所有相互信任的应用系统。这种方式减少了由登录产生的时间消耗，辅助了用户管理，是目前比较流行的 [1]
 
-#### 2、前置知识
+上面解决了同域名的session问题，但如果`taobao.com`和`tianmao.com`这种不同的域名也想共享session呢？
+
+去百度了解下：https://www.jianshu.com/p/75edcc05acfd
+
+最终解决方案：都去中央认证器
+
+> spring session已经解决不了不同域名的问题了。无法扩大域名
+
+#### sso思路
+
+记住一个核心思想：建议一个公共的登陆点server，他登录了代表这个集团的产品就登录过了
+
+> ![img](/1623316999-8279dfca7e1d33a3c4881c69bb1fb3d6.png)
+>
+> 上图是CAS官网上的标准流程，具体流程如下：有两个子系统`app1`、`app2`
+>
+> 1.  用户访问`app1`系统，`app1`系统是需要登录的，但用户现在没有登录。
+> 2.  跳转到CAS server，即SSO登录系统，**以后图中的CAS Server我们统一叫做SSO系统。** SSO系统也没有登录，弹出用户登录页。
+> 3.  用户填写用户名、密码，SSO系统进行认证后，将登录状态写入SSO的session，浏览器（Browser）中写入SSO域下的Cookie。
+> 4.  SSO系统登录完成后会生成一个`ST`（`Service Ticket`），然后跳转到`app1`系统，同时将ST作为参数传递给app1系统。
+> 5.  `app1`系统拿到ST后，从后台向SSO发送请求，验证ST是否有效。
+> 6.  验证通过后，app系统将登录状态写入session并设置app域下的Cookie。
+>
+> 至此，跨域单点登录就完成了。以后我们再访问app系统时，app就是登录的。接下来，我们再看看访问app2系统时的流程。
+>
+> 1.  用户访问`app2`系统，app2系统没有登录，跳转到SSO。
+> 2.  由于SSO已经登录了，不需要重新登录认证。
+> 3.  SSO生成ST，浏览器跳转到`app2`系统，并将ST作为参数传递给`app2`。
+> 4.  `app2`拿到ST，后台访问SSO，验证ST是否有效。
+> 5.  验证成功后，`app2`将登录状态写入session，并在`app2`域下写入Cookie。
+>
+> 这样，app2系统不需要走登录流程，就已经是登录了。SSO，app和app2在不同的域，它们之间的session不共享也是没问题的。
+>
+> **SSO系统登录后，跳回原业务系统时，带了个参数ST，业务系统还要拿ST再次访问SSO进行验证，觉得这个步骤有点多余。如果想SSO登录认证通过后，通过回调地址将用户信息返回给原业务系统，原业务系统直接设置登录状态，这样流程简单，也完成了登录，不是很好吗？**
+>
+> **其实这样问题时很严重的，如果我在SSO没有登录，而是直接在浏览器中敲入回调的地址，并带上伪造的用户信息，是不是业务系统也认为登录了呢？这是很可怕的。**
+
+SSO－Single Sign On
+
+*   server：登录服务器、8080 、ssoserver.com
+*   web-sample1：项目1 、8081 、client1.com
+*   web-sample2：项目1 、8082 、client2.com
+
+3个系统即使域名不一样，想办法给三个系统同步同一个用户的票据；
+
+*   中央认证服务器
+*   其他系统都去【中央认证服务器】登录，登录成功后跳转回原服务
+*   一个系统登录，都登录；一个系统登出，都登出
+*   全系统统一一个sso-sessionId
+
+> 1.  访问服务：SSO客户端发送请求访问应用系统提供的服务资源。
+>
+> 2.  定向认证：SSO客户端会**重定向**用户请求到SSO**服务器**。
+>
+> 3.  用户认证：用户身份认证。
+>
+> 4.  发放票据：SSO服务器会产生一个**随机的Service Ticket**。
+>
+> 5.  验证票据：SSO服务器验证票据Service Ticket的合法性，验证通过后，允许客户端访问服务。
+>
+> 6.  传输用户信息：SSO服务器验证票据通过后，传输用户认证结果信息给客户端。
+>
+> 7.  单点退出：用户退出单点登录。
+
+#### 开源项目
 
 https://gitee.com/xuxueli0323/xxl-sso
 
-#### 3、同域下的单点登录
+*   ssoserver.com 登录认证服务
+*   client1.com
+*   cleitn2.com
 
-#### 4、不同域下的单点登录
+修改HOSTS：127.0.0.1 ssoserver.com+client1.com+client2.com
 
-#### 5、单点登录框架 & 原理演示
+*   server：登录服务器、8080 、ssoserver.com
+*   web-sample1：项目1 、8081 、client1.com
+*   web-sample2：项目1 、8082 、client2.com
 
-XXL-SSO 是一个分布式单点登录框架。只需要登录一次就可以访问所有相互信任的应用系统。 拥有"轻量级、分布式、跨域、Cookie+Token均支持、Web+APP均支持"等特性。现已开放源代码，开箱即用。
+```bash
+# 根项目下
+mvn clean package -Dmaven.skip.test=true
+# 打包生成了server和client包
+# 启动server和client
+#server8080  cient1:web-sample8081 cient2:web-sample8082
+# 让client12登录一次即可
+java -jar server.jar # 8080
+java -jar client.jar 
+# 启动多个web-sample模拟多个微服务
+```
 
-首先对整个项目进行：mvn clean package -Dmaven.skip.test=true  
+把core项目mvc install 。启动server
 
-xxl-sso-server:
+#### 流程
 
-- 8080/xxl-sso-server
+*   发送`8081/employees`请求，判断没登录就跳转到`server.com:8080/login.html`登录页，并带上现`url`
+*   server登录页的时候，有之前带过来的url信息，发送登录请求的时候也把url继续带着
+    *   doLogin登录成功后返回一个token（保存到server域名下）然后重定向
+*   登录完后重定向到带的url参数的地址。
+*   跳转回业务层的时候，业务层要能感知是登录过的，调回去的时候带个uuid，用uuid去redis里（课上说的是去server里再访问一遍，为了安全性？）看user信息，保存到它系统里自己的session
+*   以后无论哪个系统访问，如果session里没有指定的内容的话，就去server登录，登录过的话已经有了server的cookie，所以不用再登录了。回来的时候就告诉了子系统应该去redis里怎么查你的用户内容
 
-- 编排：
-  - ssoserver.com 登陆验证服务器
-  - client1.com 客户端1
-  - client2.com 客户端2
+> 还得得补充一句，老师课上讲得把票据放到controller里太不合适了，你最起码得放到filter或拦截器里
 
-先启动xxl-sso-server 然后启动client1
+#### sso解决
 
-只要 `client1` 登录成功 `client2` 就不用进行登录直接登录成功
+client1.com 8081 和 client2.com 8082 都跳转到ssoserver 8080
 
-代码测试:
+*   给登录服务器留下痕迹
+*   登录服务器要将token信息重定向的时候，带到url地址上
+*   其他系统要处理url地址上的token，只要有，将token对应的用户保存到自己的session
+*   自己系统将用户保存在自己的session中
 
-sso-client
+```html
+<body>
+    <form action="/employee" method="get">
+        <input type="text" name="username" value="test">
+        <button type="submit">查询</button>
+    </form>
+</body>
+```
 
 ```java
-/**
- * @author gcq
- * @Create 2020-11-12
- */
-@Controller
-public class HelloController {
+@GetMapping(value = "/employees") // a系统
+public String employees(Model model,
+                        HttpSession session,
+                        @RequestParam(value = "redisKey", required = false) String redisKey) {
 
-    @Value("${sso.server.url}")
-    private String ssoServerUrl;
+    // 有loginToken这个参数，代表去过server端登录过了，server端里在redis里保存了个对象，而key:uuid给你发过来了
+    // 有loginToken这个参数的话代表是从登录页跳回来的，而不是系统a直接传过来的
+    // 你再拿着uuid再去查一遍user object，返回后设置到当前的系统session里
+    // 提个问题：为什么当时不直接返回user对象，而是只返回个uuid？其实也可以，但是参数的地方也得是required = false。可能也有一些安全问题
+    if (!StringUtils.isEmpty(redisKey)) { // 这个逻辑应该写到过滤器或拦截器里
+        RestTemplate restTemplate=new RestTemplate();
+        // 拿着token去服务器，在服务端从redis中查出来他的username
+        ResponseEntity<Object> forEntity =
+            restTemplate.getForEntity("http://ssoserver.com:8080/userInfo?redisKey="+ redisKey, Object.class);
 
-    /**
-     * 无需登录就可以访问
-     * @return
-     */
-    @ResponseBody
-    @RequestMapping("/hello")
-    public String hello() {
-        return "hello";
+        Object loginUser = forEntity.getBody();
+        // 设置到自己的session中
+        session.setAttribute("loginUser", loginUser);
     }
+    // session里有就代表登录过 // 获得user
+    Object loginUser = session.getAttribute("loginUser");
 
-    /**
-     * 需要验证的连接
-     * @param model
-     * @param token 只要是ssoserver登陆成功回来就会带上
-     * @return
-     */
-    @GetMapping("/employees")
-    public String employees(Model model, HttpSession session,
-                            @RequestParam(value="token",required = false) String token) {
-        if (!StringUtils.isEmpty(token)) {
-            // 去ssoserver登录成功调回来就会带上
-            //TODO 1、去ssoserver获取当前token真正对应的用户信息
-            RestTemplate restTemplate = new RestTemplate();
-            // 使用restTemplate进行远程请求
-            ResponseEntity<String> forEntity = restTemplate.getForEntity("http://ssoserver.com:8080/userInfo?token=" + token, String.class);
-            // 拿到数据
-            String body = forEntity.getBody();
-            // 设置到session中
-            session.setAttribute("loginUser",body);
-        }
-        Object loginUser = session.getAttribute("loginUser");
-        if (loginUser == null ){
-            // 没有登录重定向到登陆页面，并带上当前地址
-            return "redirect:" + ssoServerUrl + "?redirect_url=http://client1.com:8081/employees";
-        } else {
-            List<String> emps = new ArrayList<>();
-            emps.add("张三");
-            emps.add("李四");
-            model.addAttribute("emps",emps);
-            return "list";
-        }
+    if (loginUser == null) { // 又没有loginToken，session里又没有object，去登录页登录
+        return "redirect:" + "http://ssoserver.com:8080/login.html"
+            + "?url=http://clientA.com/employees";
+    } else {// 登录过，执行正常的业务
+        List<String> emps = new ArrayList<>();
 
+        emps.add("张三");
+        emps.add("李四");
+        model.addAttribute("emps", emps);
+        return "employees";
     }
 }
 ```
 
-sso-server
+##### server端
+
+*   子系统都先去`login.html`这个请求，
+    *   这个请求会告诉登录过的系统的令牌，
+    *   如果没登录过就带着url重新去server端，server给一个登录页，如下
+
+```html
+<body>
+<form action="/doLogin" method="post">
+    <!--刚才要请求数据的url，没有也没关系，就不跳转了呗-->
+    <input type="hidden" name="url" th:value="${url}">
+    <!--带上当前登录的username-->
+<!--    <input type="hidden" name="user" th:value="${username}">-->
+        用户名：<input name="username" value="test"><br/>
+        密码：<input name="password" type="password" value="test">
+    <input type="submit" value="登录">
+</form>
+</body>
+```
+
+当点击登录之后，server端返回一个cookie，子系统重新返回去重新请去业务。于是又来server端验证，这回server端有cookie了，该cookie里有用户在redis中的key，重定向时把key带到url后面，子系统就知道怎么找用户信息了
 
 ```java
-/**
- * @author gcq
- * @Create 2020-11-12
- */
 @Controller
 public class LoginController {
 
-    @Autowired
-    StringRedisTemplate redisTemplate;
+	@Autowired
+	private StringRedisTemplate stringRedisTemplate;
 
-    /**
-     * 根据token从redis中查询用户信息
-     * @param token
-     * @return
-     */
-    @ResponseBody
-    @GetMapping("/userInfo")
-    public String userInfo(@RequestParam("token") String token) {
-        String s = redisTemplate.opsForValue().get(token);
-        return s;
-    }
+	@ResponseBody
+	@GetMapping("/userInfo") // 得到redis中的存储过的user信息，返回给子系统的session中
+	public Object userInfo(@RequestParam("redisKey") String redisKey){
+		// 拿着其他域名转发过来的token去redis里查
+		Object loginUser = stringRedisTemplate.opsForValue().get(redisKey);
+		return loginUser;
+	}
 
-    @GetMapping("login.html")
-    public String login(@RequestParam("redirect_url") String url, Model model,
-                        @CookieValue(value = "sso_token",required = false)String sso_token) {
-        if (!StringUtils.isEmpty(sso_token)) {
-            //说明有人之前登录过，给浏览器留下了痕迹
-            return "redirect:" + url + "?token=" + sso_token;
-        }
-        // 添加url到model地址中，在前端页面进行取出
-        model.addAttribute("url",url);
-        return "login";
-    }
 
-    /**
-     * 登录
-     * @param username
-     * @param password
-     * @param url client端带过来的地址
-     * @return
-     */
-    @PostMapping("/doLogin")
-    public String doLogin(@RequestParam("username") String username,
-                          @RequestParam("password") String password,
-                          @RequestParam("url") String url,
-                          HttpServletResponse response){
-        // 账号密码不为空 
-        if (!StringUtils.isEmpty(username) && !StringUtils.isEmpty(password)) {
-            // 登陆成功
-            // 把登录成功的用户存起来
-            String uuid = UUID.randomUUID().toString().replace("-","");
-            redisTemplate.opsForValue().set(uuid,username);
-            // 将uuid存入cookie
-            Cookie token = new Cookie("sso_token",uuid);
-            response.addCookie(token);
-            // 保存到cookie
-            return "redirect:" + url + "?token=" + uuid;
-        }
-        // 登录失败，展示登录页
-        return "login";
-    }
+	@GetMapping("/login.html") // 子系统都来这
+	public String loginPage(@RequestParam("url") String url,
+							Model model,
+							@CookieValue(value = "redisKey", required = false) String redisKey) {
+		// 非空代表就登录过了
+		if (!StringUtils.isEmpty(redisKey)) {
+			// 告诉子系统他的redisKey，拿着该token就可以查redis了
+			return "redirect:" + url + "?redisKey=" + redisKey;
+		}
+		model.addAttribute("url", url);
+
+		// 子系统都没登录过才去登录页
+		return "login";
+	}
+
+	@PostMapping("/doLogin") // server端统一认证
+	public String doLogin(@RequestParam("username") String username,
+						  @RequestParam("password") String password,
+						  HttpServletResponse response,
+						  @RequestParam(value="url",required = false) String url){
+		// 确认用户后，生成cookie、redis中存储 // if内代表取查完数据库了
+		if(!StringUtils.isEmpty(username) && !StringUtils.isEmpty(password)){//简单认为登录正确
+			// 登录成功跳转 跳回之前的页面
+			String redisKey = UUID.randomUUID().toString().replace("-", "");
+			// 存储cookie， 是在server.com域名下存
+			Cookie cookie = new Cookie("redisKey", redisKey);
+			response.addCookie(cookie);
+			// redis中存储
+			stringRedisTemplate.opsForValue().set(redisKey, username+password+"...", 30, TimeUnit.MINUTES);
+			// user中存储的url  重定向时候带着token
+			return "redirect:" + url + "?redisKey=" + redisKey;
+		}
+		// 登录失败
+		return "login";
+	}
+
 }
+
 ```
-
-
 
 #### 6、使用 jwt
 
@@ -9442,6 +9976,76 @@ public class LoginController {
 
 
 ### 11.3 JWT
+
+### 11.4 登录拦截器
+
+#### 通用登录拦截器
+
+因为订单系统必然涉及到用户信息，因此进入订单系统的请求必须是已经登录的，所以我们需要通过拦截器对未登录订单请求进行拦截
+
+*   先注入拦截器HandlerInterceptor组件
+*   在config中实现`WebMvcConfigurer接口.addInterceptor()`方法
+*   拦截器和认证器的关系我在前面认证模块讲过，可以翻看，这里不赘述了
+
+```java
+@Component
+public class LoginUserInterceptor implements HandlerInterceptor {
+
+	public static ThreadLocal<MemberRespVo> threadLocal = new ThreadLocal<>();
+
+	@Override
+	public boolean preHandle(HttpServletRequest request,
+                             HttpServletResponse response, Object handler) throws Exception {
+
+		String uri = request.getRequestURI();
+		// 这个请求直接放行
+		boolean match = new AntPathMatcher().match("/order/order/status/**", uri);
+		if(match){
+			return true;
+		}
+		// 获取session
+		HttpSession session = request.getSession();
+		// 获取登录用户
+		MemberRespVo memberRespVo = (MemberRespVo) session.getAttribute(AuthServerConstant.LOGIN_USER);
+		if(memberRespVo != null){
+			threadLocal.set(memberRespVo);
+			return true;
+		}else{
+			// 没登陆就去登录
+			session.setAttribute("msg", AuthServerConstant.NOT_LOGIN);
+			response.sendRedirect("http://auth.gulimall.com/login.html");
+			return false;
+		}
+	}
+}
+```
+
+```JAVA
+@Configuration
+public class GulimallWebConfig implements WebMvcConfigurer {
+    @Override
+    public void addInterceptors(InterceptorRegistry registry) {
+        registry.addInterceptor(new LoginInterceptor()).addPathPatterns("/**");
+    }
+}
+```
+
+加上ThreadLocal共享数据，是为了登录后把用户放到本地内存，而不是每次都去远程session里查
+
+在auth-server中登录成功后会把会话设置到session中
+
+```java
+MemberRespVo data = login.getData("data",new TypeReference<MemberRespVo>);
+session.setAttribute(AuthServerConstant.LOGIN_USER,data);
+```
+
+#### 购物车的登录拦截器
+
+因为购物车允许临时用户，所以自定义购物车拦截器
+
+而登录操作在其他服务页面里完成即可。也可以重定向解决
+
+具体代码去购物车博文里找
 
 
 
