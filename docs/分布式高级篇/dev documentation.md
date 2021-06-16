@@ -4,7 +4,6 @@ typora-copy-images-to: images
 ---
 
 
-
 # 谷粒商城高级篇
 
 > 笔记中仍有很多不足，如有错误还请包涵(●ˇ∀ˇ●)
@@ -10053,41 +10052,17 @@ session.setAttribute(AuthServerConstant.LOGIN_USER,data);
 
 ### 12.1 购物车需求
 
-#### 1、需求描述：
+### 1. 数据模型分析
 
-用户可以在**登录状态**下将商品添加到购物车**【登录购物车/在线购物车】**
+#### (1) 数据存储
 
-放入数据库
+购物车是一个读多写多的场景，因此放入数据库并不合适，但购物车又是需要持久化，因此这里我们选用redis存储购物车数据。
 
-mongodb
+#### (2) 数据结构
 
-**放入 redis（采用）**
+<img src="/Snipaste_2020-10-01_11-08-57.png" style="zoom:38%;" />
 
-用户可以在**未登录状态**下将商品添加到购物车**【游客购物车/离线购物车】**
-
-放入 localstorage
-
-cookie 
-
-WebSQL
-
-**放入 redis (采用)**
-
-用户可以使用购物车一起结算下单
-
-用户可以**查询自己的购物车**
-
-用户可以在**购物中修改购买商品的数量**
-
-用户可以在**购物车中删除商品**
-
-**选中不选中商品**
-
-在购物车中**展示商品优惠信息**
-
-提示购物车商品价格变化
-
-购物车数据结构
+一个购物车是由各个购物项组成的，但是我们用`List`进行存储并不合适，因为使用`List`查找某个购物项时需要挨个遍历每个购物项，会造成大量时间损耗，为保证查找速度，我们使用`hash`进行存储
 
 ![image-20201113110938713](image-20201113110938713.png)
 
@@ -10141,6 +10116,12 @@ redis中：
 
 
 ### 12.2 Vo编写 & ThreadLocal身份验证
+
+#### (1) 用户身份鉴别方式
+
+参考京东，在点击购物车时，会为临时用户生成一个`name`为`user-key`的`cookie`临时标识，过期时间为一个月，如果手动清除`user-key`，那么临时购物车的购物项也被清除，所以`user-key`是用来标识和存储临时购物车数据的
+
+<img src="/Snipaste_2020-10-02_09-16-11.png" style="zoom:38%;" />
 
 #### 12.2.1 Vo 编写
 
@@ -10262,7 +10243,10 @@ public class CartItem {
 
 ```
 
-#### 12.2.3 ThreadLocal 身份验证
+#### (2) 使用ThreadLocal进行用户身份鉴别信息传递
+
+* 在调用购物车的接口前，先通过session信息判断是否登录，并分别进行用户身份信息的封装，并把`user-key`放在cookie中
+* 这个功能使用拦截器进行完成
 
 需求分析：
 
@@ -10721,22 +10705,25 @@ Service
 
 消息发送的时间取决于业务执行的最长的时间
 
-![image-20210104205412477](image-20210104205412477.png)
+![img](/1621739001571-9f36f928-3632-4068-8235-f1768402bf81.png)
+
+![img](/1621739005626-099bd417-bc62-4293-9ebf-13644d05ee83.png)
+
+![img](/1621739008547-a718ca00-e6ff-4a82-b31f-3003cceb7ce0.png)
+
+
 
 #### 应用解耦
+
+![img](/1621739027263-dc11f8be-49d1-4c72-8c09-b429f85d3111.png)
 
 原本是需要**订单系统**直接调用**库存系统**
 
 只需要将请求发送给消息队列，其他的就不需要去处理了，节省了处理业务逻辑的时间
 
-
-![image-20210104210738678](image-20210104210738678.png)
-
 #### 流量消峰
 
 某一时刻如果请求特别的大，那就先把它放入消息队列，从而达到流量消峰的作用
-
-![image-20210104210725093](image-20210104210725093.png)
 
 流程图地址：https://www.processon.com/view/link/5fbda8c35653bb1d54f7077b
 
@@ -10751,7 +10738,7 @@ Service
    2. **主题（topic）**：发布（publish）/订阅（subscribe）消息通信
 5. 点对点式：
    1. 消息发送者发送消息，消息代理将其放入一个队列中，消息接收者从队列中获取消息内容，消息读取后被移出队列
-   2. 消息只有唯一的发送者和接受者，单并不是说只能有一个接收者
+   2. 消息只有唯一的发送者和接受者，但并不是说只能有一个接收者
 6. 发布订阅式:
    1. 发送者（发布者）发到消息到主题，多个接收者（订阅者）监听（订阅）这个主题，那么就会在消息到达时同时收到消息
 7. **JMS（Java Message Service） Java消息服务：**
@@ -10812,7 +10799,7 @@ Exchange有4种类型：**direct(默认)**、**fanout**、**topic**，和**heade
 
 **Channel**
 
-信道，多路复用连接中的一个独立的双向数据流通道，信道是建立在真实的TCP连接的内的虚拟连接，AMQP 命令都是通过信息到发送出去的，不管是发布消息，订阅队列还是接收消息，这些动作都是通过队列完成，因为对应操作系统来说建立和销毁 TCP 都是非常昂贵的开销，所以引入了信道的概念，以复用一条TCP连接
+信道，多路复用连接中的一条独立的双向数据流通道。信道是建立在真实的TCP连接内的虚拟连接，AMQP命令都是通过信道 发出去的，不管是发布消息、订阅队列还是接收消息，这些动作都是通过信道完成。因为对于操作系统来说建立和销毁TCP都 是非常昂贵的开销，所以引入了信道的概念，以复用一条TCP连接。
 
 **Consumer**
 
@@ -10851,7 +10838,7 @@ docker update rabbitmq --restart=always
 
 AMQP 中的消息路由
 
-AMQP 中消息的路由过程和 Java 开发者熟悉的 JMS 存在一些差别，AMQP中增加了 **Exchange** 和 **Binding** 的角色 生产者把消息发布到 Exchange 上，消息最终到达队列并被消费者接收，而 Binding 决定交换器的消息应该发送给那个队列
+AMQP 中消息的路由过程和 Java 开发者熟悉的 JMS 存在一些差别，AMQP中增加了 **Exchange** 和 **Binding** 的角色 生产者把消息发布到 Exchange 上，消息最终到达队列并被消费者接收，而 Binding 决定交换器的消息应该发送给哪个队列
 
 ![image-20201116104235856](image-20201116104235856.png)
 
@@ -10862,6 +10849,8 @@ Exchange 分发消息时根据类型的不同分发策略有区别，目前共�
 ![image-20201116104546717](image-20201116104546717.png)
 
 ![image-20201116104918897](image-20201116104918897.png)
+
+> 生产者是指挥部，交换机好比通信兵，队列是等候命令的士兵。binding好比是入伍登记信息，记录好每个士兵的兵种，接受什么样的任务。
 
 ### 13.6 RabbitMQ 整合
 
@@ -11056,6 +11045,8 @@ Spring的schedule 定时任务轮询数据库
   - 队列的长度限制满了。排在前面的消息会被丢弃或者扔到死信路由上
 - Dead Letter Exchange其实就是一种普通的exchange, 和创建其他exchange没有两样。只是在某一个设置 Dead Letter Exchange的队列中有消息过期了自动触发消息的转发，发送到Dead Letter Exchange中去。
 - 我们既可以控制消息在一段时间后变成死信， 又可以控制变成死信的消息被路由到某一个指定的交换机， 结合C者，其实就可以实现一个延时队列
+
+> 死信路由，好比任务失败的复盘机制，好比部队里的军法处。
 
 #### 延时队列实现 - 1
 
@@ -11328,9 +11319,39 @@ public Binding orderReleaseOrderBinding(){
 1. 修改订单，用户没有提交订单，可以对订单一些信息进行修改，比如配送信息，优惠信息，及其他一些订单可修改范围的内容，此时只需对数据进行变更即可。
 2. 订单取消**，用户主动取消订单和用户超时未支付**，两种情况下订单都会取消订单，而超时情况是系统自动关闭订单，所以在订单支付的响应机制上面要做支付的
 
-### 14.3 幂等性处理
+### 
 
+### 2. 订单登录拦截
 
+因为订单系统必然涉及到用户信息，因此进入订单系统的请求必须是已经登录的，所以我们需要通过拦截器对未登录订单请求进行拦截
+
+```java
+public class LoginInterceptor implements HandlerInterceptor {
+    public static ThreadLocal<MemberResponseVo> loginUser = new ThreadLocal<>();
+
+    @Override
+    public boolean preHandle(HttpServletRequest request, HttpServletResponse response, Object handler) throws Exception {
+        HttpSession session = request.getSession();
+        MemberResponseVo memberResponseVo = (MemberResponseVo) session.getAttribute(AuthServerConstant.LOGIN_USER);
+        if (memberResponseVo != null) {
+            loginUser.set(memberResponseVo);
+            return true;
+        }else {
+            session.setAttribute("msg","请先登录");
+            response.sendRedirect("http://auth.gulimall.com/login.html");
+            return false;
+        }
+    }
+}
+
+@Configuration
+public class GulimallWebConfig implements WebMvcConfigurer {
+    @Override
+    public void addInterceptors(InterceptorRegistry registry) {
+        registry.addInterceptor(new LoginInterceptor()).addPathPatterns("/**");
+    }
+}
+```
 
 ### 14.4 订单业务
 
@@ -11338,19 +11359,7 @@ public Binding orderReleaseOrderBinding(){
 
 在订单服务下准备好页面
 
-![image-20210105095210202](image-20210105095210202.png)
 
-可以发现订单结算页，包含以下信息:
-
-1.收货人信息:有更多地址，即有多个收货地址，其中有一个默认收货地址
-
-2.支付方式:货到付款下在线支付，不需要后台提供
-
-3.送货清单:配送方式(不做)及商品列表(根据购物车选中的skuld到数据库中查询)
-
-4.发票:不做
-
-5.优惠:查询用户领取的优惠券(不做)及可用积分(京豆)
 
 ##### 1.1、整合SpringSession
 
@@ -11428,7 +11437,9 @@ Spring:
 
 #### 2、订单确认页
 
-![image-20210105142735857](image-20210105142735857.png)
+##### 1）模型抽取
+
+<img src="/Snipaste_2020-10-10_18-38-51.png" style="zoom:38%;" />
 
 **根据图片中商品信息抽取成Vo**
 
@@ -11620,7 +11631,68 @@ public class MemberAddressVo {
 }
 ```
 
+#### （3）Feign远程调用丢失请求头问题
+
+`feign`远程调用的请求头中没有含有`JSESSIONID`的`cookie`，所以也就不能得到服务端的`session`数据，cart认为没登录，获取不了用户信息
+
+![](/Snipaste_2020-10-10_21-36-18.png)
+
+<img src="/Snipaste_2020-10-10_21-47-54.png" style="zoom: 50%;" />
+
+```java
+Request targetRequest(RequestTemplate template) {
+  for (RequestInterceptor interceptor : requestInterceptors) {
+    interceptor.apply(template);
+  }
+  return target.apply(template);
+}
+```
+
+但是在`feign`的调用过程中，会使用容器中的`RequestInterceptor`对`RequestTemplate`进行处理，因此我们可以通过向容器中导入定制的`RequestInterceptor`为请求加上`cookie`。
+
+```java
+public class GuliFeignConfig {
+    @Bean
+    public RequestInterceptor requestInterceptor() {
+        return new RequestInterceptor() {
+            @Override
+            public void apply(RequestTemplate template) {
+                //1. 使用RequestContextHolder拿到老请求的请求数据
+                ServletRequestAttributes requestAttributes = (ServletRequestAttributes) RequestContextHolder.getRequestAttributes();
+                if (requestAttributes != null) {
+                    HttpServletRequest request = requestAttributes.getRequest();
+                    if (request != null) {
+                        //2. 将老请求得到cookie信息放到feign请求上
+                        String cookie = request.getHeader("Cookie");
+                        template.header("Cookie", cookie);
+                    }
+                }
+            }
+        };
+    }
+}
+```
+
+* `RequestContextHolder`为SpingMVC中共享`request`数据的上下文，底层由`ThreadLocal`实现
+
+经过`RequestInterceptor`处理后的请求如下，已经加上了请求头的`Cookie`信息
+
+<img src="/Snipaste_2020-10-10_21-55-45.png" style="zoom: 50%;" />
+
+#### （4）Feign异步情况丢失上下文问题
+
+<img src="/Snipaste_2020-10-10_22-08-32.png" style="zoom:38%;" />
+
+* 由于`RequestContextHolder`使用`ThreadLocal`共享数据，所以在开启异步时获取不到老请求的信息，自然也就无法共享`cookie`了
+
+在这种情况下，我们需要在开启异步的时候将老请求的`RequestContextHolder`的数据设置进去
+
+<img src="/Snipaste_2020-10-10_22-13-47.png" style="zoom: 67%;" />
+
 ##### 2.2、订单确认页数据查询
+
+* 查询购物项、库存和收货地址都要调用远程服务，串行会浪费大量时间，因此我们使用`CompletableFuture`进行异步编排
+* 可能由于延迟，订单提交按钮可能被点击多次，为了防止重复提交的问题，我们在返回订单确认页时，在`redis`中生成一个随机的令牌，过期时间为30min，提交的订单会携带这个令牌，我们将会在订单提交的处理页面核验此令牌
 
 ```java
    @Override
@@ -12045,6 +12117,631 @@ public class MemberAddressVo {
         return orderEntity;
     }
 ```
+
+##### 5) 锁定库存
+
+```java
+ List<OrderItemVo> orderItemVos = order.getOrderItems().stream().map((item) -> {
+                    OrderItemVo orderItemVo = new OrderItemVo();
+                    orderItemVo.setSkuId(item.getSkuId());
+                    orderItemVo.setCount(item.getSkuQuantity());
+                    return orderItemVo;
+                }).collect(Collectors.toList());
+                R r = wareFeignService.orderLockStock(orderItemVos);
+                //5.1 锁定库存成功
+                if (r.getCode()==0){
+                    responseVo.setOrder(order.getOrder());
+                    responseVo.setCode(0);
+                    return responseVo;
+                }else {
+                    //5.2 锁定库存失败
+                    String msg = (String) r.get("msg");
+                    throw new NoStockException(msg);
+                }
+```
+
+* 找出所有库存大于商品数的仓库
+* 遍历所有满足条件的仓库，逐个尝试锁库存，若锁库存成功则退出遍历
+
+```java
+@RequestMapping("/lock/order")
+public R orderLockStock(@RequestBody List<OrderItemVo> itemVos) {
+    try {
+        Boolean lock = wareSkuService.orderLockStock(itemVos);
+        return R.ok();
+    } catch (NoStockException e) {
+        return R.error(BizCodeEnum.NO_STOCK_EXCEPTION.getCode(), BizCodeEnum.NO_STOCK_EXCEPTION.getMsg());
+    }
+}
+
+@Transactional
+@Override
+public Boolean orderLockStock(List<OrderItemVo> itemVos) {
+    List<SkuLockVo> lockVos = itemVos.stream().map((item) -> {
+        SkuLockVo skuLockVo = new SkuLockVo();
+        skuLockVo.setSkuId(item.getSkuId());
+        skuLockVo.setNum(item.getCount());
+        //找出所有库存大于商品数的仓库
+        List<Long> wareIds = baseMapper.listWareIdsHasStock(item.getSkuId(), item.getCount());
+        skuLockVo.setWareIds(wareIds);
+        return skuLockVo;
+    }).collect(Collectors.toList());
+
+    for (SkuLockVo lockVo : lockVos) {
+        boolean lock = true;
+        Long skuId = lockVo.getSkuId();
+        List<Long> wareIds = lockVo.getWareIds();
+        //如果没有满足条件的仓库，抛出异常
+        if (wareIds == null || wareIds.size() == 0) {
+            throw new NoStockException(skuId);
+        }else {
+            for (Long wareId : wareIds) {
+                Long count=baseMapper.lockWareSku(skuId, lockVo.getNum(), wareId);
+                if (count==0){
+                    lock=false;
+                }else {
+                    lock = true;
+                    break;
+                }
+            }
+        }
+        if (!lock) throw new NoStockException(skuId);
+    }
+    return true;
+}
+```
+
+这里通过异常机制控制事务回滚，如果在锁定库存失败则抛出`NoStockException`s,订单服务和库存服务都会回滚。
+
+#### （3） 分布式事务
+
+分布式情况下，可能出现一些服务事务不一致的情况
+
+* 远程服务假失败
+* 远程服务执行完成后，下面其他方法出现异常
+
+<img src="/Snipaste_2020-10-11_09-15-30.png" style="zoom:38%;" />
+
+#### （4）使用seata解决分布式事务问题
+
+导入依赖
+
+```xml
+<dependency>
+    <groupId>com.alibaba.cloud</groupId>
+    <artifactId>spring-cloud-starter-alibaba-seata</artifactId>
+</dependency>
+```
+
+环境搭建
+
+下载senta-server-0.7.1并修改`register.conf`,使用nacos作为注册中心
+
+```shell
+registry {
+  # file 、nacos 、eureka、redis、zk、consul、etcd3、sofa
+  type = "nacos"
+
+  nacos {
+    serverAddr = "#:8848"
+    namespace = "public"
+    cluster = "default"
+  }
+```
+
+将`register.conf`和`file.conf`复制到需要开启分布式事务的根目录，并修改`file.conf`
+
+ `vgroup_mapping.${application.name}-fescar-service-group = "default"`
+
+```shell
+service {
+  #vgroup->rgroup
+  vgroup_mapping.gulimall-ware-fescar-service-group = "default"
+  #only support single node
+  default.grouplist = "127.0.0.1:8091"
+  #degrade current not support
+  enableDegrade = false
+  #disable
+  disable = false
+  #unit ms,s,m,h,d represents milliseconds, seconds, minutes, hours, days, default permanent
+  max.commit.retry.timeout = "-1"
+  max.rollback.retry.timeout = "-1"
+}
+```
+
+使用seata包装数据源
+
+```java
+@Configuration
+public class MySeataConfig {
+    @Autowired
+    DataSourceProperties dataSourceProperties;
+
+    @Bean
+    public DataSource dataSource(DataSourceProperties dataSourceProperties) {
+
+        HikariDataSource dataSource = dataSourceProperties.initializeDataSourceBuilder().type(HikariDataSource.class).build();
+        if (StringUtils.hasText(dataSourceProperties.getName())) {
+            dataSource.setPoolName(dataSourceProperties.getName());
+        }
+        return new DataSourceProxy(dataSource);
+    }
+}
+```
+
+在大事务的入口标记注解`@GlobalTransactional`开启全局事务，并且每个小事务标记注解`@Transactional`
+
+```java
+@GlobalTransactional
+@Transactional
+@Override
+public SubmitOrderResponseVo submitOrder(OrderSubmitVo submitVo) {
+}
+```
+
+### 5. 使用消息队列实现最终一致性
+
+#### (1) 延迟队列的定义与实现
+
+* 定义：
+
+  延迟队列存储的对象肯定是对应的延时消息，所谓"延时消息"是指当消息被发送以后，并不想让消费者立即拿到消息，而是等待指定时间后，消费者才拿到这个消息进行消费。
+
+* 实现：
+
+  rabbitmq可以通过设置队列的`TTL`和死信路由实现延迟队列
+
+  * TTL：
+
+  >RabbitMQ可以针对Queue设置x-expires 或者 针对Message设置 x-message-ttl，来控制消息的生存时间，如果超时(两者同时设置以最先到期的时间为准)，则消息变为dead letter(死信)
+
+  
+
+  * 死信路由DLX
+
+  >RabbitMQ的Queue可以配置x-dead-letter-exchange 和x-dead-letter-routing-key（可选）两个参数，如果队列内出现了dead letter，则按照这两个参数重新路由转发到指定的队列。
+
+  >- x-dead-letter-exchange：出现dead letter之后将dead letter重新发送到指定exchange
+  >- x-dead-letter-routing-key：出现dead letter之后将dead letter重新按照指定的routing-key发送
+
+<img src="/Snipaste_2020-10-11_17-00-18.png" style="zoom: 50%;" />
+
+针对订单模块创建以上消息队列，创建订单时消息会被发送至队列`order.delay.queue`，经过`TTL`的时间后消息会变成死信以`order.release.order`的路由键经交换机转发至队列`order.release.order.queue`，再通过监听该队列的消息来实现过期订单的处理
+
+#### (2) 延迟队列使用场景
+
+<img src="/Snipaste_2020-10-14_15-42-12.png" style="zoom: 25%;" />
+
+**为什么不能用定时任务完成？**
+
+如果恰好在一次扫描后完成业务逻辑，那么就会等待两个扫描周期才能扫到过期的订单，不能保证时效性
+
+<img src="/Snipaste_2020-10-14_15-43-37.png" style="zoom: 25%;" />
+
+
+
+#### (3) 定时关单与库存解锁主体逻辑
+
+* 订单超时未支付触发订单过期状态修改与库存解锁
+
+> 创建订单时消息会被发送至队列`order.delay.queue`，经过`TTL`的时间后消息会变成死信以`order.release.order`的路由键经交换机转发至队列`order.release.order.queue`，再通过监听该队列的消息来实现过期订单的处理
+>
+> * 如果该订单已支付，则无需处理
+> * 否则说明该订单已过期，修改该订单的状态并通过路由键`order.release.other`发送消息至队列`stock.release.stock.queue`进行库存解锁
+
+* 库存锁定后延迟检查是否需要解锁库存
+
+> 在库存锁定后通过`路由键stock.locked`发送至`延迟队列stock.delay.queue`，延迟时间到，死信通过`路由键stock.release`转发至`stock.release.stock.queue`,通过监听该队列进行判断当前订单状态，来确定库存是否需要解锁
+
+* 由于`关闭订单`和`库存解锁`都有可能被执行多次，因此要保证业务逻辑的幂等性，在执行业务是重新查询当前的状态进行判断
+* 订单关闭和库存解锁都会进行库存解锁的操作，来确保业务异常或者订单过期时库存会被可靠解锁
+
+![](/Snipaste_2020-10-11_22-49-23.png)
+
+<img src="/Snipaste_2020-10-11_22-41-45.png" style="zoom:67%;" />
+
+#### (4) 创建业务交换机和队列
+
+* 订单模块
+
+```java
+@Configuration
+public class MyRabbitmqConfig {
+    @Bean
+    public Exchange orderEventExchange() {
+        /**
+         *   String name,
+         *   boolean durable,
+         *   boolean autoDelete,
+         *   Map<String, Object> arguments
+         */
+        return new TopicExchange("order-event-exchange", true, false);
+    }
+
+    /**
+     * 延迟队列
+     * @return
+     */
+    @Bean
+    public Queue orderDelayQueue() {
+       /**
+            Queue(String name,  队列名字
+            boolean durable,  是否持久化
+            boolean exclusive,  是否排他
+            boolean autoDelete, 是否自动删除
+            Map<String, Object> arguments) 属性
+         */
+        HashMap<String, Object> arguments = new HashMap<>();
+        //死信交换机
+        arguments.put("x-dead-letter-exchange", "order-event-exchange");
+        //死信路由键
+        arguments.put("x-dead-letter-routing-key", "order.release.order");
+        arguments.put("x-message-ttl", 60000); // 消息过期时间 1分钟
+        return new Queue("order.delay.queue",true,false,false,arguments);
+    }
+
+    /**
+     * 普通队列
+     *
+     * @return
+     */
+    @Bean
+    public Queue orderReleaseQueue() {
+
+        Queue queue = new Queue("order.release.order.queue", true, false, false);
+
+        return queue;
+    }
+
+    /**
+     * 创建订单的binding
+     * @return
+     */
+    @Bean
+    public Binding orderCreateBinding() {
+        /**
+         * String destination, 目的地（队列名或者交换机名字）
+         * DestinationType destinationType, 目的地类型（Queue、Exhcange）
+         * String exchange,
+         * String routingKey,
+         * Map<String, Object> arguments
+         * */
+        return new Binding("order.delay.queue", Binding.DestinationType.QUEUE, "order-event-exchange", "order.create.order", null);
+    }
+
+    @Bean
+    public Binding orderReleaseBinding() {
+        return new Binding("order.release.order.queue",
+                Binding.DestinationType.QUEUE,
+                "order-event-exchange",
+                "order.release.order",
+                null);
+    }
+
+    @Bean
+    public Binding orderReleaseOrderBinding() {
+        return new Binding("stock.release.stock.queue",
+                Binding.DestinationType.QUEUE,
+                "order-event-exchange",
+                "order.release.other.#",
+                null);
+    }
+}
+```
+
+* 库存模块
+
+```java
+@Configuration
+public class MyRabbitmqConfig {
+
+    @Bean
+    public Exchange stockEventExchange() {
+        return new TopicExchange("stock-event-exchange", true, false);
+    }
+
+    /**
+     * 延迟队列
+     * @return
+     */
+    @Bean
+    public Queue stockDelayQueue() {
+        HashMap<String, Object> arguments = new HashMap<>();
+        arguments.put("x-dead-letter-exchange", "stock-event-exchange");
+        arguments.put("x-dead-letter-routing-key", "stock.release");
+        // 消息过期时间 2分钟
+        arguments.put("x-message-ttl", 120000);
+        return new Queue("stock.delay.queue", true, false, false, arguments);
+    }
+
+    /**
+     * 普通队列，用于解锁库存
+     * @return
+     */
+    @Bean
+    public Queue stockReleaseStockQueue() {
+        return new Queue("stock.release.stock.queue", true, false, false, null);
+    }
+
+
+    /**
+     * 交换机和延迟队列绑定
+     * @return
+     */
+    @Bean
+    public Binding stockLockedBinding() {
+        return new Binding("stock.delay.queue",
+                Binding.DestinationType.QUEUE,
+                "stock-event-exchange",
+                "stock.locked",
+                null);
+    }
+
+    /**
+     * 交换机和普通队列绑定
+     * @return
+     */
+    @Bean
+    public Binding stockReleaseBinding() {
+        return new Binding("stock.release.stock.queue",
+                Binding.DestinationType.QUEUE,
+                "stock-event-exchange",
+                "stock.release.#",
+                null);
+    }
+}
+```
+
+#### (5) 库存自动解锁
+
+##### 1）库存锁定
+
+在库存锁定是添加以下逻辑
+
+* 由于可能订单回滚的情况，所以为了能够得到库存锁定的信息，在锁定时需要记录库存工作单，其中包括订单信息和锁定库存时的信息(仓库id，商品id，锁了几件...)
+* 在锁定成功后，向延迟队列发消息，带上库存锁定的相关信息
+
+```java
+@Transactional
+@Override
+public Boolean orderLockStock(WareSkuLockVo wareSkuLockVo) {
+    //因为可能出现订单回滚后，库存锁定不回滚的情况，但订单已经回滚，得不到库存锁定信息，因此要有库存工作单
+    WareOrderTaskEntity taskEntity = new WareOrderTaskEntity();
+    taskEntity.setOrderSn(wareSkuLockVo.getOrderSn());
+    taskEntity.setCreateTime(new Date());
+    wareOrderTaskService.save(taskEntity);
+
+    List<OrderItemVo> itemVos = wareSkuLockVo.getLocks();
+    List<SkuLockVo> lockVos = itemVos.stream().map((item) -> {
+        SkuLockVo skuLockVo = new SkuLockVo();
+        skuLockVo.setSkuId(item.getSkuId());
+        skuLockVo.setNum(item.getCount());
+        List<Long> wareIds = baseMapper.listWareIdsHasStock(item.getSkuId(), item.getCount());
+        skuLockVo.setWareIds(wareIds);
+        return skuLockVo;
+    }).collect(Collectors.toList());
+
+    for (SkuLockVo lockVo : lockVos) {
+        boolean lock = true;
+        Long skuId = lockVo.getSkuId();
+        List<Long> wareIds = lockVo.getWareIds();
+        if (wareIds == null || wareIds.size() == 0) {
+            throw new NoStockException(skuId);
+        }else {
+            for (Long wareId : wareIds) {
+                Long count=baseMapper.lockWareSku(skuId, lockVo.getNum(), wareId);
+                if (count==0){
+                    lock=false;
+                }else {
+                    //锁定成功，保存工作单详情
+                    WareOrderTaskDetailEntity detailEntity = WareOrderTaskDetailEntity.builder()
+                            .skuId(skuId)
+                            .skuName("")
+                            .skuNum(lockVo.getNum())
+                            .taskId(taskEntity.getId())
+                            .wareId(wareId)
+                            .lockStatus(1).build();
+                    wareOrderTaskDetailService.save(detailEntity);
+                    //发送库存锁定消息至延迟队列
+                    StockLockedTo lockedTo = new StockLockedTo();
+                    lockedTo.setId(taskEntity.getId());
+                    StockDetailTo detailTo = new StockDetailTo();
+                    BeanUtils.copyProperties(detailEntity,detailTo);
+                    lockedTo.setDetailTo(detailTo);
+                    rabbitTemplate.convertAndSend("stock-event-exchange","stock.locked",lockedTo);
+
+                    lock = true;
+                    break;
+                }
+            }
+        }
+        if (!lock) throw new NoStockException(skuId);
+    }
+    return true;
+}
+```
+
+##### 2）监听队列
+
+* 延迟队列会将过期的消息路由至`"stock.release.stock.queue"`,通过监听该队列实现库存的解锁
+* 为保证消息的可靠到达，我们使用手动确认消息的模式，在解锁成功后确认消息，若出现异常则重新归队
+
+```java
+@Component
+@RabbitListener(queues = {"stock.release.stock.queue"})
+public class StockReleaseListener {
+
+    @Autowired
+    private WareSkuService wareSkuService;
+
+    @RabbitHandler
+    public void handleStockLockedRelease(StockLockedTo stockLockedTo, Message message, Channel channel) throws IOException {
+        log.info("************************收到库存解锁的消息********************************");
+        try {
+            wareSkuService.unlock(stockLockedTo);
+            channel.basicAck(message.getMessageProperties().getDeliveryTag(), false);
+        } catch (Exception e) {
+            channel.basicReject(message.getMessageProperties().getDeliveryTag(),true);
+        }
+    }
+}
+```
+
+##### 3）库存解锁
+
+* 如果工作单详情不为空，说明该库存锁定成功
+  * 查询最新的订单状态，如果订单不存在，说明订单提交出现异常回滚，或者订单处于已取消的状态，我们都对已锁定的库存进行解锁
+* 如果工作单详情为空，说明库存未锁定，自然无需解锁
+* 为保证幂等性，我们分别对订单的状态和工作单的状态都进行了判断，只有当订单过期且工作单显示当前库存处于锁定的状态时，才进行库存的解锁
+
+```java
+ @Override
+    public void unlock(StockLockedTo stockLockedTo) {
+        StockDetailTo detailTo = stockLockedTo.getDetailTo();
+        WareOrderTaskDetailEntity detailEntity = wareOrderTaskDetailService.getById(detailTo.getId());
+        //1.如果工作单详情不为空，说明该库存锁定成功
+        if (detailEntity != null) {
+            WareOrderTaskEntity taskEntity = wareOrderTaskService.getById(stockLockedTo.getId());
+            R r = orderFeignService.infoByOrderSn(taskEntity.getOrderSn());
+            if (r.getCode() == 0) {
+                OrderTo order = r.getData("order", new TypeReference<OrderTo>() {
+                });
+                //没有这个订单||订单状态已经取消 解锁库存
+                if (order == null||order.getStatus()== OrderStatusEnum.CANCLED.getCode()) {
+                    //为保证幂等性，只有当工作单详情处于被锁定的情况下才进行解锁
+                    if (detailEntity.getLockStatus()== WareTaskStatusEnum.Locked.getCode()){
+                        unlockStock(detailTo.getSkuId(), detailTo.getSkuNum(), detailTo.getWareId(), detailEntity.getId());
+                    }
+                }
+            }else {
+                throw new RuntimeException("远程调用订单服务失败");
+            }
+        }else {
+            //无需解锁
+        }
+    }
+```
+
+#### (6) 定时关单
+
+##### 1) 提交订单
+
+```java
+@Transactional
+@Override
+public SubmitOrderResponseVo submitOrder(OrderSubmitVo submitVo) {
+
+    //提交订单的业务处理。。。
+    
+    //发送消息到订单延迟队列，判断过期订单
+    rabbitTemplate.convertAndSend("order-event-exchange","order.create.order",order.getOrder());
+
+               
+}
+```
+
+##### 2) 监听队列
+
+创建订单的消息会进入延迟队列，最终发送至队列`order.release.order.queue`，因此我们对该队列进行监听，进行订单的关闭
+
+```java
+@Component
+@RabbitListener(queues = {"order.release.order.queue"})
+public class OrderCloseListener {
+
+    @Autowired
+    private OrderService orderService;
+
+    @RabbitHandler
+    public void listener(OrderEntity orderEntity, Message message, Channel channel) throws IOException {
+        System.out.println("收到过期的订单信息，准备关闭订单" + orderEntity.getOrderSn());
+        long deliveryTag = message.getMessageProperties().getDeliveryTag();
+        try {
+            orderService.closeOrder(orderEntity);
+            channel.basicAck(deliveryTag,false);
+        } catch (Exception e){
+            channel.basicReject(deliveryTag,true);
+        }
+
+    }
+}
+```
+
+##### 3) 关闭订单
+
+* 由于要保证幂等性，因此要查询最新的订单状态判断是否需要关单
+* 关闭订单后也需要解锁库存，因此发送消息进行库存、会员服务对应的解锁
+
+```java
+@Override
+public void closeOrder(OrderEntity orderEntity) {
+    //因为消息发送过来的订单已经是很久前的了，中间可能被改动，因此要查询最新的订单
+    OrderEntity newOrderEntity = this.getById(orderEntity.getId());
+    //如果订单还处于新创建的状态，说明超时未支付，进行关单
+    if (newOrderEntity.getStatus() == OrderStatusEnum.CREATE_NEW.getCode()) {
+        OrderEntity updateOrder = new OrderEntity();
+        updateOrder.setId(newOrderEntity.getId());
+        updateOrder.setStatus(OrderStatusEnum.CANCLED.getCode());
+        this.updateById(updateOrder);
+
+        //关单后发送消息通知其他服务进行关单相关的操作，如解锁库存
+        OrderTo orderTo = new OrderTo();
+        BeanUtils.copyProperties(newOrderEntity,orderTo);
+        rabbitTemplate.convertAndSend("order-event-exchange", "order.release.other",orderTo);
+    }
+}
+```
+
+##### 4) 解锁库存
+
+```java
+@Slf4j
+@Component
+@RabbitListener(queues = {"stock.release.stock.queue"})
+public class StockReleaseListener {
+
+    @Autowired
+    private WareSkuService wareSkuService;
+
+    @RabbitHandler
+    public void handleStockLockedRelease(StockLockedTo stockLockedTo, Message message, Channel channel) throws IOException {
+        log.info("************************收到库存解锁的消息********************************");
+        try {
+            wareSkuService.unlock(stockLockedTo);
+            channel.basicAck(message.getMessageProperties().getDeliveryTag(), false);
+        } catch (Exception e) {
+            channel.basicReject(message.getMessageProperties().getDeliveryTag(),true);
+        }
+    }
+
+    @RabbitHandler
+    public void handleStockLockedRelease(OrderTo orderTo, Message message, Channel channel) throws IOException {
+        log.info("************************从订单模块收到库存解锁的消息********************************");
+        try {
+            wareSkuService.unlock(orderTo);
+            channel.basicAck(message.getMessageProperties().getDeliveryTag(), false);
+        } catch (Exception e) {
+            channel.basicReject(message.getMessageProperties().getDeliveryTag(),true);
+        }
+    }
+}
+```
+
+```java
+@Override
+public void unlock(OrderTo orderTo) {
+    //为防止重复解锁，需要重新查询工作单
+    String orderSn = orderTo.getOrderSn();
+    WareOrderTaskEntity taskEntity = wareOrderTaskService.getBaseMapper().selectOne((new QueryWrapper<WareOrderTaskEntity>().eq("order_sn", orderSn)));
+    //查询出当前订单相关的且处于锁定状态的工作单详情
+    List<WareOrderTaskDetailEntity> lockDetails = wareOrderTaskDetailService.list(new QueryWrapper<WareOrderTaskDetailEntity>().eq("task_id", taskEntity.getId()).eq("lock_status", WareTaskStatusEnum.Locked.getCode()));
+    for (WareOrderTaskDetailEntity lockDetail : lockDetails) {
+        unlockStock(lockDetail.getSkuId(),lockDetail.getSkuNum(),lockDetail.getWareId(),lockDetail.getId());
+    }
+}
+```
+
+
 
 ##### 3、库存自动解锁--->MQ
 
